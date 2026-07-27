@@ -164,12 +164,12 @@ mono       Opus 5-1M | ! 7d #######- 83%-2d | ctx 12% of 1M | 1h 11m
 badge      colored blocks with inverse text — the boxed-screenshot look, in any font
 soft       one dark band, segments as colored text with ╱ separators — starship's
            "classic" look, any font, immune to minimum-contrast terminal features
-rainbow    a train of colored blocks with diagonal ◣ cuts between them — starship's
-           "rainbow" look, any font (backgrounds cycle the palette; meters keep
-           their meaning through the ⚠ and the percentage)
-powerline  arrow-joined blocks              — needs a Nerd Font
-slant      the same train, diagonal ◣ cuts in any font,  edges with a Nerd Font
-capsule    each segment its own pill  …    — needs a Nerd Font
+rainbow    a train of palette-cycling blocks with ╱ cuts — starship's "rainbow"
+           look, any font (backgrounds are decorative; meters keep their meaning
+           through the ⚠ and the percentage)
+powerline  block train: hard color edges in any font,  arrows with a Nerd Font
+slant      block train with ╱ cuts in any font,  edges with a Nerd Font
+capsule    each segment its own pill:  caps with a Nerd Font, wider pills without
 
 frame      ╭──────────────────────────────────────────────╮
            │ ⚡ Opus 5·1M · ⚠ 7d ▰▰▰▰▰▰▰▱ 83%·2d · ctx 12% │
@@ -186,10 +186,16 @@ fall back to characters every font has:
 
 | Theme | `ICONS=nerd` (native) | `ICONS=unicode` (default) |
 |---|---|---|
-| powerline | `` / `` arrows | `▶` arrows, `›` thin |
-| slant | `` /  `` edges | `◣` diagonal cuts (fg + bg on both sides — minimum‑contrast‑proof), `╱` thin |
-| capsule | `` … `` round caps | `▐` … `▌` half-block caps, pinned to the default background (`49m`) so minimum‑contrast can't darken them |
+| powerline | `` / `` arrows, pointed tail | **hard edges** — the colored blocks butt directly against each other, `│` thin separator, flat ends |
+| slant | `` / `` edges | `╱` cuts drawn on the next block's background (box‑drawing — full‑cell in every monospace font), flat ends |
+| capsule | `` … `` round caps | no caps — just wider pills (double padding) |
 | badge / soft / rainbow | — | pure backgrounds/text, nothing font-dependent |
+
+The fallbacks deliberately use **only characters with cell metrics** (box‑drawing and
+backgrounds). Geometric shapes like `▶ ◣ ▐ ▌` render with symbol metrics in many
+fonts — smaller than the cell, baseline‑aligned — which shows up as notches and
+floating triangles; they are gone from the fallback path entirely. If you want the
+pointed powerline look, install a Nerd Font and set `ICONS=nerd`.
 
 So `capsule` without a Nerd Font gives you square-edged pills instead of boxes of tofu,
 and `ICONS=nerd` is the explicit opt-in once you've installed the font. Palettes are an

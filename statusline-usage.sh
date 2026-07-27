@@ -99,21 +99,25 @@ THEMES = {
                   "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
     "mono":      {"mode": "sep", "sep": " | ", "open": "",   "close": "",
                   "bar": ("#", "-"), "icons": "none",    "color": False, "pad": False},
+    # Unicode fallbacks use only cell-metric characters: hard edges (no glyph at
+    # all) or box-drawing ╱ │, which every monospace font draws full-cell. The
+    # geometric shapes ▶ ◣ ▐ ▌ rendered with symbol metrics — notches and floating
+    # triangles — so they are gone from the fallback path entirely.
     "powerline": {"mode": "joined", "arrow": "", "thin": "",
-                  "arrow_alt": "▶", "thin_alt": "›",
+                  "arrow_alt": "", "thin_alt": "│",
                   "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
     "slant":     {"mode": "joined", "arrow": "", "thin": "",
-                  "arrow_alt": "◣", "thin_alt": "╱", "diag_alt": True,
+                  "arrow_alt": "╱", "thin_alt": "╱", "slash_alt": True,
                   "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
     "capsule":   {"mode": "pills", "lcap": "", "rcap": "",
-                  "lcap_alt": "▐", "rcap_alt": "▌",
+                  "lcap_alt": "", "rcap_alt": "", "wide_alt": True,
                   "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
     "badge":     {"mode": "pills", "lcap": "", "rcap": "",
                   "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
     "soft":      {"mode": "tinted", "tint": 238, "thin": "╱",
                   "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
-    "rainbow":   {"mode": "joined", "arrow": "◣", "thin": "╱",
-                  "arrow_alt": "◣", "thin_alt": "╱", "diag_alt": True, "rainbow": True,
+    "rainbow":   {"mode": "joined", "arrow": "╱", "thin": "╱",
+                  "arrow_alt": "╱", "thin_alt": "╱", "slash_alt": True, "rainbow": True,
                   "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
 }
 
@@ -180,10 +184,11 @@ def apply_config(conf):
     T_THIN  = T.get("thin")  if nerd else T.get("thin_alt",  T.get("thin"))
     T_LCAP  = T.get("lcap")  if nerd else T.get("lcap_alt",  T.get("lcap"))
     T_RCAP  = T.get("rcap")  if nerd else T.get("rcap_alt",  T.get("rcap"))
-    global T_DIAG
-    # Diagonal joins draw fg=prev over bg=next with ◣ — a slanted cut built purely
-    # from backgrounds, which "minimum contrast" terminal features can't wash out.
-    T_DIAG = bool(T.get("rainbow")) or (not nerd and T.get("diag_alt", False))
+    global T_SLASH, T_WIDE
+    # Slash joins draw a dark ╱ on the NEXT block's background — box-drawing chars
+    # are full-cell in monospace fonts, so no notches, no floating triangles.
+    T_SLASH = bool(T.get("rainbow")) or ((not nerd) and bool(T.get("slash_alt")))
+    T_WIDE  = (not nerd) and bool(T.get("wide_alt"))   # capsule sans caps: wider pills
     global RULE
     RULE = flag("RULE")
     global T_BAR, BARW
@@ -231,6 +236,14 @@ try:
     WIDTH = int(os.environ.get("COLUMNS") or 0)     # Claude Code sets this for hooks
 except ValueError:
     WIDTH = 0
+if not WIDTH:
+    # Shells rarely export COLUMNS, so a --preview run in a live terminal would
+    # otherwise render unpadded. Only succeeds when stdout is a real TTY; inside
+    # Claude Code stdout is a pipe and COLUMNS comes from the environment anyway.
+    try:
+        WIDTH = os.get_terminal_size(sys.stdout.fileno()).columns
+    except (OSError, ValueError):
+        pass
 
 # Priority decides what gets dropped first when the line is wider than the terminal.
 # >= 90 is never dropped: the model, the meters and the warnings are the whole point.
@@ -283,13 +296,16 @@ def render_line(segs):
         for i, s in enumerate(segs):
             fg = s["color"] if s["color"] is not None else 250
             if i:
-                out.append(f"{band}\033[38;5;245m {thin} ")
+                out.append(f"{band}\033[38;5;245m{thin}")
             out.append(f"{band}\033[38;5;{fg}m {seg_text(s)} ")
         out.append("\033[0m")
         return "".join(out)
     if mode == "joined":
         # A powerline train: blocks share edges, a join marks each color change.
+        # Without a Nerd Font the joins are hard edges (no glyph) or a dark ╱ on
+        # the next block's background; only ICONS=nerd draws glyph joins + tail.
         arrow, thin = T_ARROW, T_THIN
+        nerd_joins = bool(arrow) and not T_SLASH
         colors = None
         if T.get("rainbow"):
             p = PALETTES[PALETTE]
@@ -306,25 +322,27 @@ def render_line(segs):
                 nxt = None
             out.append(f"\033[48;5;{bg}m\033[38;5;232m {seg_text(s)} \033[0m")
             if nxt is None:
-                out.append(f"\033[38;5;{bg}m{arrow}\033[0m")     # tail taper
+                if nerd_joins:
+                    out.append(f"\033[38;5;{bg}m{arrow}\033[0m")   # pointed tail (nerd)
             elif nxt == bg:
-                # Same background: a solid join would vanish; use the thin separator.
-                out.append(f"\033[48;5;{bg}m\033[38;5;232m{thin}\033[0m")
-            elif T_DIAG:
-                # Diagonal cut: prev color fills the lower-left of ◣, next shows above.
+                if thin:
+                    out.append(f"\033[48;5;{bg}m\033[38;5;232m{thin}\033[0m")
+            elif T_SLASH:
+                out.append(f"\033[48;5;{nxt}m\033[38;5;232m{arrow}\033[0m")
+            elif nerd_joins:
                 out.append(f"\033[38;5;{bg}m\033[48;5;{nxt}m{arrow}\033[0m")
-            else:
-                out.append(f"\033[38;5;{bg}m\033[48;5;{nxt}m{arrow}\033[0m")
+            # else: hard edge — the backgrounds butt against each other directly
         return "".join(out)
     if mode == "pills":
-        # Every segment is its own block; caps (if any) round it into a pill.
-        # \033[49m pins the cap to the DEFAULT background explicitly, which stops
-        # minimum-contrast features from darkening the cap against it.
+        # Every segment is its own block. Round caps need a Nerd Font; without one
+        # the pills are simply wider (double padding) — an honest degradation that
+        # cannot render as broken glyph metrics.
         lcap, rcap = T_LCAP, T_RCAP
+        pad = "  " if T_WIDE else " "
         out = []
         for s in segs:
             bg = s["color"] if s["color"] is not None else 238
-            pill = f"\033[48;5;{bg}m\033[38;5;232m {seg_text(s)} \033[0m"
+            pill = f"\033[48;5;{bg}m\033[38;5;232m{pad}{seg_text(s)}{pad}\033[0m"
             if lcap:
                 pill = (f"\033[49m\033[38;5;{bg}m{lcap}\033[0m" + pill
                         + f"\033[49m\033[38;5;{bg}m{rcap}\033[0m")
@@ -386,6 +404,8 @@ def bar(p, n=None):
     if T_BAR is None:                         # dot style: a single status dot
         return "●"
     on, off = T_BAR
+    if T.get("mode") in ("joined", "pills"):
+        off = " "                             # on a colored block, hatching is noise
     n = n or BARW
     f = max(0, min(n, int(round(p / 100.0 * n))))
     return on * f + off * (n - f)
@@ -1403,7 +1423,7 @@ def run_doctor():
 
     print("\nglyphs — if any of these are boxes, pick a different theme")
     print("   plain/full bars  ▉▉▉░░░░░")
-    print("   boxed bars       ▰▰▰▱▱▱▱▱   frame │ ╭╮╰╯   dots ·   joins ◣ ╱ ▶")
+    print("   boxed bars       ▰▰▰▱▱▱▱▱   frame │ ╭╮╰╯   dots ·   joins ╱ │")
     print("   bar styles       " + "  ".join(f"{k} {v[0]}{v[0]}{v[1]}{v[1]}" for k, v in BARS.items()))
     print("   powerline   · slant  · capsule  · icons    (need a Nerd Font)")
     print("   icons            ⚡ ⑂ 📁 🔍 ⚠ ⏱   sparkline ▁▂▃▄▅▆▇█")
@@ -1763,7 +1783,7 @@ TUI_ENUMS = {
     "NOTIFY": ["off", "threshold", "all"],
 }
 TUI_HELP = {
-    "THEME": "soft/rainbow/badge work in ANY font · powerline/slant/capsule look best with a Nerd Font (unicode fallbacks: ▶ ◣ ▐▌)",
+    "THEME": "soft/rainbow/badge work in ANY font · without a Nerd Font powerline=hard edges, slant/rainbow=╱ cuts, capsule=wide pills",
     "PALETTE": "recolors every theme; green→amber→red always keeps its meaning",
     "ICONS": "unicode = ⚡ ⑂ ⏱ everywhere · nerd = Nerd Font glyphs (needs the font!) · none = text only",
     "BAR": "meter bar style: theme keeps each theme's own · ▉░ ▰▱ █▒ ━╌ ●○ ▪▫ ▮▯ #-",
