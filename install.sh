@@ -45,6 +45,21 @@ else:
         print("  (backup saved as settings.json.bak)")
 PY
 
+# Ask what to show. Falls back to writing defaults when there's no terminal
+# (piped installs, CI), so this never blocks an unattended run.
+if [ -f "$HOME/.claude/statusline-usage.conf" ]; then
+  echo "✓ keeping existing config → $HOME/.claude/statusline-usage.conf"
+  echo "  (change it with: bash $DEST --configure)"
+else
+  bash "$DEST" --configure
+fi
+
 echo
 echo "Done. Open a NEW Claude Code session to see the usage statusline."
-echo "Tip: override the alert threshold with  export CLAUDE_USAGE_THRESHOLD=75"
+echo "Tip: re-run the picker any time with  bash $DEST --configure"
+echo "     bash $DEST --doctor      # check config, caches, token, glyphs"
+echo "     bash $DEST --report      # per-day spend by model (--json / --csv)"
+echo "     or override a single setting for one session, e.g."
+echo "       export CLAUDE_USAGE_STYLE=full      # adaptive | full | compact"
+echo "       export CLAUDE_USAGE_THRESHOLD=75"
+echo "       export CLAUDE_USAGE_REMOTE=1        # Fable 5 meter + usage credits"
