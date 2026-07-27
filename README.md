@@ -97,7 +97,7 @@ can be overridden for a single session with the matching `CLAUDE_USAGE_<KEY>` en
 
 | Key | Default | What it does |
 |---|---|---|
-| `THEME` | `plain` | `plain` · `boxed` · `dots` · `mono` · `badge` · `powerline` · `slant` · `capsule` — see below |
+| `THEME` | `plain` | `plain` · `boxed` · `dots` · `mono` · `badge` · `soft` · `rainbow` · `powerline` · `slant` · `capsule` · `frame` — see below |
 | `PALETTE` | `default` | `default` · `ocean` · `sunset` · `forest` — recolors every theme; the green→amber→red meaning never changes |
 | `ICONS` | `unicode` | `unicode` = ⚡ ⑂ ⏱ symbols that render in any font · `nerd` = native Nerd Font glyphs · `none` = text only. Also switches the powerline arrows/caps (see below) |
 | `BAR` | `theme` | Meter bar style: `theme` (each theme's own) · `boxes` ▉░ · `slant` ▰▱ · `shade` █▒ · `line` ━╌ · `dots` ●○ · `mini` ▪▫ · `bars` ▮▯ · `ascii` #- · `dot` (a single colored ●) (`mono` always uses ascii) |
@@ -162,8 +162,13 @@ boxed      │ ⚡ Opus 5·1M │ 7d 44% │ ⑂ main !3 │ 📁 statusline │
 dots       ⚡ Opus 5·1M · 7d 44% · ctx 12% of 1M · ⏱ 1h 11m
 mono       Opus 5-1M | ! 7d #######- 83%-2d | ctx 12% of 1M | 1h 11m
 badge      colored blocks with inverse text — the boxed-screenshot look, in any font
+soft       one dark band, segments as colored text with ╱ separators — starship's
+           "classic" look, any font, immune to minimum-contrast terminal features
+rainbow    a train of colored blocks with diagonal ◣ cuts between them — starship's
+           "rainbow" look, any font (backgrounds cycle the palette; meters keep
+           their meaning through the ⚠ and the percentage)
 powerline  arrow-joined blocks              — needs a Nerd Font
-slant      the same train, slanted edges  — needs a Nerd Font
+slant      the same train, diagonal ◣ cuts in any font,  edges with a Nerd Font
 capsule    each segment its own pill  …    — needs a Nerd Font
 
 frame      ╭──────────────────────────────────────────────╮
@@ -181,9 +186,10 @@ fall back to characters every font has:
 
 | Theme | `ICONS=nerd` (native) | `ICONS=unicode` (default) |
 |---|---|---|
-| powerline / slant | `` / `` arrows | `▶` arrows, `›` thin |
-| capsule | `` … `` round caps | `▐` … `▌` half-block caps |
-| badge | no caps | no caps |
+| powerline | `` / `` arrows | `▶` arrows, `›` thin |
+| slant | `` /  `` edges | `◣` diagonal cuts (fg + bg on both sides — minimum‑contrast‑proof), `╱` thin |
+| capsule | `` … `` round caps | `▐` … `▌` half-block caps, pinned to the default background (`49m`) so minimum‑contrast can't darken them |
+| badge / soft / rainbow | — | pure backgrounds/text, nothing font-dependent |
 
 So `capsule` without a Nerd Font gives you square-edged pills instead of boxes of tofu,
 and `ICONS=nerd` is the explicit opt-in once you've installed the font. Palettes are an

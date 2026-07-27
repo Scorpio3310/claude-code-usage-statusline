@@ -103,12 +103,17 @@ THEMES = {
                   "arrow_alt": "▶", "thin_alt": "›",
                   "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
     "slant":     {"mode": "joined", "arrow": "", "thin": "",
-                  "arrow_alt": "▶", "thin_alt": "›",
+                  "arrow_alt": "◣", "thin_alt": "╱", "diag_alt": True,
                   "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
     "capsule":   {"mode": "pills", "lcap": "", "rcap": "",
                   "lcap_alt": "▐", "rcap_alt": "▌",
                   "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
     "badge":     {"mode": "pills", "lcap": "", "rcap": "",
+                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
+    "soft":      {"mode": "tinted", "tint": 238, "thin": "╱",
+                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
+    "rainbow":   {"mode": "joined", "arrow": "◣", "thin": "╱",
+                  "arrow_alt": "◣", "thin_alt": "╱", "diag_alt": True, "rainbow": True,
                   "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
 }
 
@@ -175,6 +180,10 @@ def apply_config(conf):
     T_THIN  = T.get("thin")  if nerd else T.get("thin_alt",  T.get("thin"))
     T_LCAP  = T.get("lcap")  if nerd else T.get("lcap_alt",  T.get("lcap"))
     T_RCAP  = T.get("rcap")  if nerd else T.get("rcap_alt",  T.get("rcap"))
+    global T_DIAG
+    # Diagonal joins draw fg=prev over bg=next with ◣ — a slanted cut built purely
+    # from backgrounds, which "minimum contrast" terminal features can't wash out.
+    T_DIAG = bool(T.get("rainbow")) or (not nerd and T.get("diag_alt", False))
     global RULE
     RULE = flag("RULE")
     global T_BAR, BARW
@@ -265,34 +274,60 @@ def render_line(segs):
     if not segs:
         return ""
     mode = T.get("mode", "sep")
+    if mode == "tinted":
+        # One shared dark band; each segment keeps its semantic color as TEXT.
+        # fg on a set background is immune to minimum-contrast adjustments.
+        tint, thin = T.get("tint", 238), T.get("thin", "╱")
+        band = f"\033[48;5;{tint}m"
+        out = [band]
+        for i, s in enumerate(segs):
+            fg = s["color"] if s["color"] is not None else 250
+            if i:
+                out.append(f"{band}\033[38;5;245m {thin} ")
+            out.append(f"{band}\033[38;5;{fg}m {seg_text(s)} ")
+        out.append("\033[0m")
+        return "".join(out)
     if mode == "joined":
-        # A powerline train: blocks share edges, an arrow marks each color change.
+        # A powerline train: blocks share edges, a join marks each color change.
         arrow, thin = T_ARROW, T_THIN
+        colors = None
+        if T.get("rainbow"):
+            p = PALETTES[PALETTE]
+            cycle = [p["brand"], p["blue"], p["green"], p["amber"], p["purple"], p["tan"]]
+            colors = [cycle[i % len(cycle)] for i in range(len(segs))]
         out = []
         for i, s in enumerate(segs):
-            bg = s["color"] if s["color"] is not None else 238
-            nxt = segs[i + 1]["color"] if i + 1 < len(segs) else None
-            if i + 1 < len(segs) and nxt is None:
-                nxt = 238
+            bg = colors[i] if colors else (s["color"] if s["color"] is not None else 238)
+            if i + 1 < len(segs):
+                nxt = colors[i + 1] if colors else segs[i + 1]["color"]
+                if nxt is None:
+                    nxt = 238
+            else:
+                nxt = None
             out.append(f"\033[48;5;{bg}m\033[38;5;232m {seg_text(s)} \033[0m")
             if nxt is None:
-                out.append(f"\033[38;5;{bg}m{arrow}\033[0m")     # tail
+                out.append(f"\033[38;5;{bg}m{arrow}\033[0m")     # tail taper
             elif nxt == bg:
-                # Same background: a solid arrow would be invisible; use the thin
-                # separator powerline reserves for exactly this case.
+                # Same background: a solid join would vanish; use the thin separator.
                 out.append(f"\033[48;5;{bg}m\033[38;5;232m{thin}\033[0m")
+            elif T_DIAG:
+                # Diagonal cut: prev color fills the lower-left of ◣, next shows above.
+                out.append(f"\033[38;5;{bg}m\033[48;5;{nxt}m{arrow}\033[0m")
             else:
                 out.append(f"\033[38;5;{bg}m\033[48;5;{nxt}m{arrow}\033[0m")
         return "".join(out)
     if mode == "pills":
         # Every segment is its own block; caps (if any) round it into a pill.
+        # \033[49m pins the cap to the DEFAULT background explicitly, which stops
+        # minimum-contrast features from darkening the cap against it.
         lcap, rcap = T_LCAP, T_RCAP
         out = []
         for s in segs:
             bg = s["color"] if s["color"] is not None else 238
             pill = f"\033[48;5;{bg}m\033[38;5;232m {seg_text(s)} \033[0m"
             if lcap:
-                pill = f"\033[38;5;{bg}m{lcap}\033[0m" + pill + f"\033[38;5;{bg}m{rcap}\033[0m"
+                pill = (f"\033[49m\033[38;5;{bg}m{lcap}\033[0m" + pill
+                        + f"\033[49m\033[38;5;{bg}m{rcap}\033[0m")
             out.append(pill)
         return " ".join(out)
     body = T["sep"].join(paint(s["text"], s["color"]) + paint(s["suffix"], C_DIM)
@@ -1368,7 +1403,7 @@ def run_doctor():
 
     print("\nglyphs — if any of these are boxes, pick a different theme")
     print("   plain/full bars  ▉▉▉░░░░░")
-    print("   boxed bars       ▰▰▰▱▱▱▱▱   frame │   dots ·")
+    print("   boxed bars       ▰▰▰▱▱▱▱▱   frame │ ╭╮╰╯   dots ·   joins ◣ ╱ ▶")
     print("   bar styles       " + "  ".join(f"{k} {v[0]}{v[0]}{v[1]}{v[1]}" for k, v in BARS.items()))
     print("   powerline   · slant  · capsule  · icons    (need a Nerd Font)")
     print("   icons            ⚡ ⑂ 📁 🔍 ⚠ ⏱   sparkline ▁▂▃▄▅▆▇█")
@@ -1728,7 +1763,7 @@ TUI_ENUMS = {
     "NOTIFY": ["off", "threshold", "all"],
 }
 TUI_HELP = {
-    "THEME": "powerline/slant/capsule look best with a Nerd Font; with Icons=unicode they use ▶ and ▐▌ instead, so they work in any font",
+    "THEME": "soft/rainbow/badge work in ANY font · powerline/slant/capsule look best with a Nerd Font (unicode fallbacks: ▶ ◣ ▐▌)",
     "PALETTE": "recolors every theme; green→amber→red always keeps its meaning",
     "ICONS": "unicode = ⚡ ⑂ ⏱ everywhere · nerd = Nerd Font glyphs (needs the font!) · none = text only",
     "BAR": "meter bar style: theme keeps each theme's own · ▉░ ▰▱ █▒ ━╌ ●○ ▪▫ ▮▯ #-",
@@ -2063,7 +2098,7 @@ case "${1:-}" in
     if [ -n "${2:-}" ]; then
       render_preview CLAUDE_USAGE_THEME="$2" ${3:+CLAUDE_USAGE_PALETTE="$3"}
     else
-      for t in plain boxed dots mono badge powerline slant capsule; do
+      for t in plain boxed dots mono badge soft rainbow powerline slant capsule frame; do
         printf '%s:\n' "$t"; render_preview CLAUDE_USAGE_THEME="$t" | sed 's/^/  /'; echo
       done
     fi
