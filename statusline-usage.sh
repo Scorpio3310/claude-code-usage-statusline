@@ -61,7 +61,7 @@ DEFAULTS = {
     "ICONS": "unicode", "RULE": "0", "BAR": "theme", "BARW": "8",
     "BUDGET_MONTH": "0", "BUDGET_DAY": "0", "CMD": "", "CMD_TTL": "30",
     "BAR_HEAT": "0", "FRAME": "round", "FRAME_TITLE": "off",
-    "FRAME_COLOR": "dim", "TINT": "off",
+    "FRAME_COLOR": "dim", "TINT": "off", "MARGIN": "0",
 }
 ENV_ALIASES = {"REMOTE": ("FABLE",), "REMOTE_DEBUG": ("FABLE_DEBUG",)}
 
@@ -264,6 +264,8 @@ def apply_config(conf):
         BARW = max(4, min(16, int(float(s("BARW")))))
     except ValueError:
         BARW = 8
+    global MARGIN
+    MARGIN = max(0, min(20, int(num("MARGIN"))))
     global BUDGET_MONTH, BUDGET_DAY, CMD, CMD_TTL, BAR_HEAT
     BUDGET_MONTH, BUDGET_DAY = num("BUDGET_MONTH"), num("BUDGET_DAY")
     # Heat needs embedded fg codes inside the segment text, which only sep-mode
@@ -306,6 +308,11 @@ try:
     WIDTH = int(os.environ.get("COLUMNS") or 0)     # Claude Code sets this for hooks
 except ValueError:
     WIDTH = 0
+if WIDTH and _MODE == "render":
+    # Claude Code reports the full terminal width but draws the statusline in a
+    # slightly narrower area (built-in margins + settings.json padding) and clips
+    # the overflow with its own … — MARGIN shaves that difference off up front.
+    WIDTH = max(20, WIDTH - MARGIN)
 if not WIDTH:
     # Shells rarely export COLUMNS, so a --preview run in a live terminal would
     # otherwise render unpadded. Only succeeds when stdout is a real TTY; inside
@@ -566,17 +573,23 @@ def model_seg(d):
     if not label:
         m = re.search(r"claude-([a-z]+)", mid)
         label = m.group(1).capitalize() if m else (mid or "?")
+    # "Opus 5 (1M context)" -> "Opus 5"; the marker comes back as a compact ·1M below
+    label = re.sub(r"\s*\([^)]*(?:1m|context)[^)]*\)\s*$", "", label, flags=re.I).strip()
     mm = re.search(r"claude-[a-z]+-(\d+(?:-\d+)?)", mid)
     if mm:
         ver = mm.group(1).replace("-", ".")
         if ver not in label:
             label += " " + ver
 
-    cw = d.get("context_window") or {}
-    is_1m = "[1m]" in mid or (cw.get("context_window_size") or 0) >= 1000000
-    low = label.lower()
-    if is_1m and "1m" not in low and "context" not in low:
-        label += "·1M"
+    # An oversized window arrives three ways: a "[1m]" id tag, a "(1M context)"
+    # display suffix, or the window size itself. Size wins the label, so a future
+    # 2M model reads "·2M" rather than a hardcoded 1M.
+    cw   = d.get("context_window") or {}
+    size = cw.get("context_window_size") or 0
+    tag  = re.search(r"\[(\d+)m\]", mid) or re.search(r"\((\d+)\s*m\b", disp, re.I)
+    big  = tokens(size) if size >= 1000000 else (tag.group(1) + "M" if tag else "")
+    if big and big.lower() not in label.lower():
+        label += "·" + big
     icon = (IC["model"] + " ") if IC["model"] else ""
     return seg("model", icon + label, col)
 
@@ -1448,7 +1461,8 @@ def run_doctor():
     tint_req = str(ec.get("TINT", "off")).strip().lower()
     print(f"   looks    : FRAME={str(ec.get('FRAME')).lower()} FRAME_TITLE={FRAME_TITLE} "
           f"FRAME_COLOR={FRAME_COLOR} TINT={tint_req} ICONS={ICON_MODE} "
-          f"BAR={str(ec.get('BAR')).lower()} BARW={BARW} BAR_HEAT={int(bool(BAR_HEAT))} RULE={int(RULE)}")
+          f"BAR={str(ec.get('BAR')).lower()} BARW={BARW} BAR_HEAT={int(bool(BAR_HEAT))} "
+          f"RULE={int(RULE)} MARGIN={MARGIN}")
     print(f"   segments : {','.join(SEGS)}")
     print(f"   line2    : {','.join(LINE2)}")
     if tint_req not in ("", "off", "0") and TINT is None:
@@ -1896,6 +1910,11 @@ ICONS={ICONS}
 # 1 = draw a dim ─ rule as the last line, separating usage from Claude Code's footer
 RULE={RULE}
 
+# Columns shaved off the width Claude Code reports — its UI draws the statusline in
+# a slightly narrower area, so full-width themes (frame/boxed) get clipped with …
+# by Claude Code itself. Raise this until the right edge survives (2-4 is typical).
+MARGIN={MARGIN}
+
 # Meter bar style: theme (each theme's own) · boxes ▉░ · slant ▰▱ · shade █▒
 # · line ━╌ · dots ●○ · mini ▪▫ · bars ▮▯ · ascii #- · dot (a single ●)
 # BARW = width in cells (4-16). BAR_HEAT=1 colors cells by zone (sep themes only).
@@ -2025,6 +2044,7 @@ TUI_HELP = {
     "THRESHOLD": "at this % a meter turns red, gets a bar and a warning",
     "NOTICE": "adaptive only: meters below this % stay hidden",
     "RULE": "adds a ─ rule as the last line — separates usage from Claude Code's own footer",
+    "MARGIN": "columns shaved off the reported width — raise (2-4) if Claude Code clips the line with …",
     "GIT": "branch is read from .git/HEAD (free); dirty also counts changes in the background",
     "REMOTE": "fetches Fable 5/Opus quotas + usage credits from api.anthropic.com (cached, opt-in)",
     "NOTIFY": "desktop notification when something crosses the threshold",
@@ -2044,6 +2064,7 @@ TUI_HELP = {
     "warn": "up to two warnings: limits, credits, auto-compact, projections",
 }
 TUI_NUMS = {"THRESHOLD": (5, 50, 100), "NOTICE": (5, 0, 95), "BARW": (1, 4, 16),
+            "MARGIN": (1, 0, 20),
             "BUDGET_MONTH": (50, 0, 1000000), "BUDGET_DAY": (10, 0, 100000)}
 
 def run_tui():
@@ -2071,7 +2092,7 @@ def run_tui():
 
     opt_keys = ["THEME", "FRAME", "FRAME_TITLE", "FRAME_COLOR", "TINT", "PALETTE",
                 "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE", "NOTICE",
-                "THRESHOLD", "RULE", "BUDGET_MONTH", "BUDGET_DAY",
+                "THRESHOLD", "RULE", "MARGIN", "BUDGET_MONTH", "BUDGET_DAY",
                 "GIT", "REMOTE", "NOTIFY"]
     # Rows drawn as a tree under the row whose value decides their visibility.
     CHILD_OF = {"FRAME": "THEME", "FRAME_TITLE": "THEME", "FRAME_COLOR": "THEME",
@@ -2130,7 +2151,7 @@ def run_tui():
               "PALETTE": "Palette", "ICONS": "Icons",
               "BAR": "Bar", "BARW": "Bar width", "BAR_HEAT": "Heat bar",
               "LINES": "Lines", "STYLE": "Density", "THRESHOLD": "Threshold",
-              "NOTICE": "Notice", "RULE": "Rule line", "GIT": "Git",
+              "NOTICE": "Notice", "RULE": "Rule line", "MARGIN": "Margin", "GIT": "Git",
               "BUDGET_MONTH": "Budget $/mo", "BUDGET_DAY": "Budget $/day",
               "REMOTE": "Remote fetch", "NOTIFY": "Notify"}
     ENUM_NAMES = {"REMOTE": {"0": "off", "1": "on"}, "RULE": {"0": "off", "1": "on"},
