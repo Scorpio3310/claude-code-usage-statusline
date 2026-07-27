@@ -138,8 +138,8 @@ THEMES = {
                   "bar": ("▰", "▱"), "color": True,  "pad": False},
     "soft":      {"mode": "tinted", "tint": 238, "thin": "╱",
                   "bar": ("▰", "▱"), "color": True,  "pad": False},
-    "rainbow":   {"mode": "joined", "arrow": "╱", "thin": "╱",
-                  "arrow_alt": "╱", "thin_alt": "╱", "slash_alt": True, "rainbow": True,
+    "rainbow":   {"mode": "joined", "arrow": "", "thin": "",
+                  "arrow_alt": "", "thin_alt": "│", "rainbow": True,
                   "bar": ("▰", "▱"), "color": True,  "pad": False},
 }
 
@@ -230,7 +230,7 @@ def apply_config(conf):
     global T_SLASH, T_WIDE
     # Slash joins draw a dark ╱ on the NEXT block's background — box-drawing chars
     # are full-cell in monospace fonts, so no notches, no floating triangles.
-    T_SLASH = bool(T.get("rainbow")) or ((not nerd) and bool(T.get("slash_alt")))
+    T_SLASH = (not nerd) and bool(T.get("slash_alt"))
     T_WIDE  = (not nerd) and bool(T.get("wide_alt"))   # capsule sans caps: wider pills
     global RULE
     RULE = flag("RULE")
@@ -2000,8 +2000,8 @@ CONF_TEMPLATE = """\
 # Re-run the configurator any time:  bash ~/.claude/statusline-usage.sh --configure
 
 # plain · boxed · frame · dots · prompt · gutter · mono (ASCII, no color)
-# badge · soft · rainbow (block styles, any font)
-# powerline · slant · capsule (best with a Nerd Font; degrade cleanly without)
+# badge · soft (block styles, any font)
+# powerline · slant · capsule · rainbow (best with a Nerd Font; degrade cleanly without)
 THEME={THEME}
 
 # frame theme only — border charset: round ╭─╮ · sharp ┌─┐ · double ╔═╗ · heavy ┏━┓
@@ -2155,7 +2155,7 @@ TUI_ENUMS = {
     "UPDATE": ["notify", "auto", "off"],
 }
 TUI_HELP = {
-    "THEME": "soft/rainbow/badge work in ANY font · without a Nerd Font powerline=hard edges, slant/rainbow=╱ cuts, capsule=wide pills",
+    "THEME": "soft/rainbow/badge work in ANY font · without a Nerd Font powerline/rainbow=hard edges, slant=╱ cuts, capsule=wide pills",
     "PALETTE": "recolors every theme; green→amber→red always keeps its meaning",
     "ICONS": "unicode = ⚡ ⑂ ⏱ everywhere · nerd = Nerd Font glyphs (needs the font!) · none = text only",
     "BAR": "meter bar style: theme keeps each theme's own · ▉░ ▰▱ █▒ ━╌ ●○ ▪▫ ▮▯ #-",
