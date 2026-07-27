@@ -32,7 +32,7 @@ command -v python3 >/dev/null 2>&1 || {
 
 # Single source of truth for the version; the GitHub release workflow checks it
 # against package.json and the git tag. Exported so the Python side can read it.
-export STATUSLINE_VERSION="1.0.0"
+export STATUSLINE_VERSION="1.0.1"
 
 CONF_PATH="${CLAUDE_USAGE_CONF:-$HOME/.claude/statusline-usage.conf}"
 
