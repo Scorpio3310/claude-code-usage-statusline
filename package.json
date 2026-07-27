@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Usage-focused statusline for Claude Code: real daily/monthly spend, rate-limit meters, per-model quotas, thirteen themes, palettes and a zero-dependency live TUI configurator.",
   "bin": {
-    "claude-usage-statusline": "./install.sh"
+    "claude-usage-statusline": "install.sh"
   },
   "files": [
     "statusline-usage.sh",
