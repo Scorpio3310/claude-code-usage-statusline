@@ -28,14 +28,17 @@ if os.path.exists(settings):
         d = json.load(open(settings))
     except Exception:
         d = {}
-    shutil.copy(settings, settings + ".bak")  # backup existing
 existing = d.get("statusLine")
 if existing and existing.get("command") != script:
     print("⚠ You already have a different statusLine configured:")
     print("   ", json.dumps(existing))
-    print("   Leaving it untouched. To use this one, set statusLine.command to:")
-    print("   ", script)
+    print("   Leaving it untouched (no backup written). To use this one, set")
+    print("    statusLine.command to:", script)
 else:
+    # Back up only when we are about to modify the file — a no-op re-install
+    # must not clobber the previous backup.
+    if os.path.exists(settings) and existing != {"type": "command", "command": script, "padding": 1}:
+        shutil.copy(settings, settings + ".bak")
     d["statusLine"] = {"type": "command", "command": script, "padding": 1}
     with open(settings, "w") as f:
         json.dump(d, f, indent=2)
@@ -56,9 +59,11 @@ fi
 
 echo
 echo "Done. Open a NEW Claude Code session to see the usage statusline."
-echo "Tip: re-run the picker any time with  bash $DEST --configure"
+echo "Tip: re-run the editor any time with  bash $DEST --configure"
+echo "     bash $DEST --preview     # every theme, rendered with sample data"
 echo "     bash $DEST --doctor      # check config, caches, token, glyphs"
 echo "     bash $DEST --report      # per-day spend by model (--json / --csv)"
+echo "     bash $DEST --save-preset work   # snapshot configs, switch with --preset"
 echo "     or override a single setting for one session, e.g."
 echo "       export CLAUDE_USAGE_STYLE=full      # adaptive | full | compact"
 echo "       export CLAUDE_USAGE_THRESHOLD=75"

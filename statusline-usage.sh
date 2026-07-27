@@ -2,23 +2,32 @@
 # Claude Usage Monitor — Claude Code statusline.
 #
 # Line 1: what's close to a limit — model, rate-limit meters, context, git, timer.
-# Line 2: what it costs — this session, today (per model), this month, usage credits,
-#         burn rate, and up to two warnings. (Fold into one line with LINES=1.)
+# Line 2: what it costs — this session, today (per model), this month, month-end
+#         forecast, usage credits, burn rate, sparkline, cache hit rate, and up to
+#         two warnings. (Fold into one line with LINES=1.)
 #
 # Claude Code only hands the statusline cost.total_cost_usd for the CURRENT session, so
-# "today"/"month" are reconstructed from the token usage recorded in the transcripts under
-# ~/.claude/projects/*/*.jsonl, priced at published API rates (hence "≈"). Transcripts are
-# append-only, so the cache keeps a byte offset per file and each render parses only the
-# tail — a 65 MB session transcript costs ~5 ms instead of ~500 ms.
+# "today"/"month" are reconstructed from the token usage recorded in every transcript
+# under ~/.claude/projects/ (including subagent and workflow transcripts), priced at
+# published API rates (hence "≈"). Transcripts are append-only, so the cache keeps a
+# byte offset per file and each render parses only the tail of what grew.
 #
 # The Fable 5 meter and usage-credit balance are OFF unless REMOTE=1: Claude Code only puts
 # five_hour and seven_day in the payload, so those come from the endpoint /usage reads.
 # That fetch (and the git dirty count) run detached in the background — a render never
 # blocks — read your existing OAuth token, never refresh it, and fail silently.
 #
-# Configure with:  bash statusline-usage.sh --configure     (wizard, with live previews)
-# Preview a theme: bash statusline-usage.sh --preview boxed
+# Configure with:  bash statusline-usage.sh --configure     (full-screen live editor)
+# Preview themes:  bash statusline-usage.sh --preview [theme] [palette]
+# Health check:    bash statusline-usage.sh --doctor
+# Spend history:   bash statusline-usage.sh --report [--projects]
+# Presets:         bash statusline-usage.sh --save-preset/--preset/--presets
 # Config file:     ~/.claude/statusline-usage.conf          (env CLAUDE_USAGE_* overrides)
+
+command -v python3 >/dev/null 2>&1 || {
+  echo "statusline-usage: python3 not found" >&2
+  exit 0   # exit clean so Claude Code doesn't surface an error for a missing statusline
+}
 
 CONF_PATH="${CLAUDE_USAGE_CONF:-$HOME/.claude/statusline-usage.conf}"
 
@@ -35,7 +44,7 @@ if _MODE in ("render", "preview"):
     except Exception:
         sys.exit(0)
 else:
-    d = {}                                    # doctor/report don't read a payload
+    d = {}                                    # doctor/report/themes don't read a payload
 
 # ---- configuration ------------------------------------------------------------
 # Everything the renderer needs is derived from one flat dict of strings, so the same
@@ -51,7 +60,8 @@ DEFAULTS = {
     "GIT": "branch", "REMOTE": "0", "NOTIFY": "off", "REMOTE_DEBUG": "0",
     "ICONS": "unicode", "RULE": "0", "BAR": "theme", "BARW": "8",
     "BUDGET_MONTH": "0", "BUDGET_DAY": "0", "CMD": "", "CMD_TTL": "30",
-    "BAR_HEAT": "0",
+    "BAR_HEAT": "0", "FRAME": "round", "FRAME_TITLE": "off",
+    "FRAME_COLOR": "dim", "TINT": "off",
 }
 ENV_ALIASES = {"REMOTE": ("FABLE",), "REMOTE_DEBUG": ("FABLE_DEBUG",)}
 
@@ -89,37 +99,51 @@ def effective_conf():
 # train (arrow between blocks), "pills" wraps every segment in its own block.
 THEMES = {
     "plain":     {"mode": "sep", "sep": "  ",  "open": "",   "close": "",
-                  "bar": ("▉", "░"), "icons": "unicode", "color": True,  "pad": False},
+                  "bar": ("▉", "░"), "color": True,  "pad": False},
     "boxed":     {"mode": "sep", "sep": " │ ", "open": "│ ", "close": " │",
-                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": True},
-    "frame":     {"mode": "sep", "sep": " · ", "open": "│ ", "close": " │",
-                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": True,
+                  "bar": ("▰", "▱"), "color": True,  "pad": True},
+    "frame":     {"mode": "sep", "sep": " · ",                 # walls come from FRAME_CH
+                  "bar": ("▰", "▱"), "color": True,  "pad": True,
                   "frame": True},
     "dots":      {"mode": "sep", "sep": " · ", "open": "",   "close": "",
-                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
+                  "bar": ("▰", "▱"), "color": True,  "pad": False},
+    "prompt":    {"mode": "sep", "sep": " · ", "open": "",   "close": "",
+                  "bar": ("▰", "▱"), "color": True,  "pad": False,
+                  "connector": True},
+    "gutter":    {"mode": "sep", "sep": " · ", "open": "",   "close": "",
+                  "bar": ("▰", "▱"), "color": True,  "pad": False,
+                  "gutter": True},
     "mono":      {"mode": "sep", "sep": " | ", "open": "",   "close": "",
-                  "bar": ("#", "-"), "icons": "none",    "color": False, "pad": False},
+                  "bar": ("#", "-"), "color": False, "pad": False},
     # Unicode fallbacks use only cell-metric characters: hard edges (no glyph at
     # all) or box-drawing ╱ │, which every monospace font draws full-cell. The
     # geometric shapes ▶ ◣ ▐ ▌ rendered with symbol metrics — notches and floating
     # triangles — so they are gone from the fallback path entirely.
     "powerline": {"mode": "joined", "arrow": "", "thin": "",
                   "arrow_alt": "", "thin_alt": "│",
-                  "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
+                  "bar": ("▰", "▱"), "color": True,  "pad": False},
     "slant":     {"mode": "joined", "arrow": "", "thin": "",
                   "arrow_alt": "╱", "thin_alt": "╱", "slash_alt": True,
-                  "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
+                  "bar": ("▰", "▱"), "color": True,  "pad": False},
     "capsule":   {"mode": "pills", "lcap": "", "rcap": "",
                   "lcap_alt": "", "rcap_alt": "", "wide_alt": True,
-                  "bar": ("▰", "▱"), "icons": "nerd",    "color": True,  "pad": False},
+                  "bar": ("▰", "▱"), "color": True,  "pad": False},
     "badge":     {"mode": "pills", "lcap": "", "rcap": "",
-                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
+                  "bar": ("▰", "▱"), "color": True,  "pad": False},
     "soft":      {"mode": "tinted", "tint": 238, "thin": "╱",
-                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
+                  "bar": ("▰", "▱"), "color": True,  "pad": False},
     "rainbow":   {"mode": "joined", "arrow": "╱", "thin": "╱",
                   "arrow_alt": "╱", "thin_alt": "╱", "slash_alt": True, "rainbow": True,
-                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
+                  "bar": ("▰", "▱"), "color": True,  "pad": False},
 }
+
+# Frame charsets: corners, horizontal, side wall, and the caps around an embedded
+# title — all cell-metric box drawing, no font dependency.
+FRAMES = {"round":  ("╭", "─", "╮", "╰", "╯", "│", "┤", "├"),
+          "sharp":  ("┌", "─", "┐", "└", "┘", "│", "┤", "├"),
+          "double": ("╔", "═", "╗", "╚", "╝", "║", "╡", "╞"),
+          "heavy":  ("┏", "━", "┓", "┗", "┛", "┃", "┫", "┣"),
+          "dashed": ("╭", "╌", "╮", "╰", "╯", "│", "┤", "├")}
 
 ICONS = {
     "unicode": {"model": "⚡", "git": "⑂", "dir": "📁", "time": "⏱",
@@ -140,12 +164,25 @@ PALETTES = {
                 "dim": 245, "purple": 168, "blue": 132, "tan": 137},
     "forest":  {"red": 167, "amber": 178, "green": 71,  "brand": 107, "money": 108,
                 "dim": 243, "purple": 139, "blue": 66,  "tan": 144},
+    # 256-color ports of the classic schemes; hand-tuned so the severity scale survives.
+    "nord":    {"red": 131, "amber": 179, "green": 108, "brand": 110, "money": 109,
+                "dim": 245, "purple": 139, "blue": 67,  "tan": 173},
+    "dracula": {"red": 203, "amber": 215, "green": 84,  "brand": 212, "money": 156,
+                "dim": 245, "purple": 141, "blue": 117, "tan": 228},
+    "gruvbox": {"red": 167, "amber": 214, "green": 142, "brand": 208, "money": 108,
+                "dim": 245, "purple": 175, "blue": 109, "tan": 187},
+    "catppuccin": {"red": 211, "amber": 216, "green": 151, "brand": 183, "money": 116,
+                "dim": 245, "purple": 147, "blue": 111, "tan": 223},
 }
 
 # Meter bar styles — an axis of their own; "theme" keeps each theme's native pair.
 BARS = {"boxes": ("▉", "░"), "slant": ("▰", "▱"), "shade": ("█", "▒"),
         "line": ("━", "╌"), "dots": ("●", "○"), "mini": ("▪", "▫"),
         "bars": ("▮", "▯"), "ascii": ("#", "-"), "dot": None}   # dot = one ● only
+
+# Named background tones for TINT; the conf also accepts any raw 0-255 index.
+TINT_TONES = {"ink": 233, "coal": 235, "graphite": 237, "slate": 238,
+              "navy": 17, "ocean": 23, "plum": 53, "forest": 22}
 
 def apply_config(conf):
     """Derive every renderer setting from a flat dict of strings."""
@@ -191,6 +228,30 @@ def apply_config(conf):
     T_WIDE  = (not nerd) and bool(T.get("wide_alt"))   # capsule sans caps: wider pills
     global RULE
     RULE = flag("RULE")
+    global FRAME_CH, FRAME_TITLE, T_OPEN, T_CLOSE, T_PREFIX_W
+    FRAME_CH = FRAMES.get(s("FRAME").lower(), FRAMES["round"])
+    FRAME_TITLE = s("FRAME_TITLE").lower()
+    if FRAME_TITLE not in ("session", "dir"):
+        FRAME_TITLE = "off"
+    # The frame's side walls must match the chosen charset; THEMES stays constant.
+    T_OPEN, T_CLOSE = T.get("open", ""), T.get("close", "")
+    if T.get("frame"):
+        T_OPEN, T_CLOSE = FRAME_CH[5] + " ", " " + FRAME_CH[5]
+    # prompt/gutter prefixes are prepended after fit/clip — reserve their width.
+    T_PREFIX_W = 3 if T.get("connector") else (2 if T.get("gutter") else 0)
+    global TINT
+    t_ = s("TINT").lower()
+    if t_ in TINT_TONES:
+        TINT = TINT_TONES[t_]
+    else:
+        try:
+            v_ = int(float(t_))
+            TINT = v_ if 0 <= v_ <= 255 else None
+        except ValueError:
+            TINT = None
+    # Same gate as BAR_HEAT: a band under block themes is invisible or wrong.
+    if TINT is not None and not (T.get("mode", "sep") == "sep" and T["color"]):
+        TINT = None
     global T_BAR, BARW
     bar_style = s("BAR").lower()
     if THEME_NAME == "mono":
@@ -228,6 +289,15 @@ def apply_config(conf):
     C_BRAND, C_MONEY, C_DIM = p["brand"], p["money"], p["dim"]
     C_PURPLE, C_BLUE, C_TAN = p["purple"], p["blue"], p["tan"]
     MODEL_COLORS = {"fable": C_PURPLE, "sonnet": C_BLUE, "haiku": C_GREEN, "opus": C_BRAND}
+    global FRAME_COLOR, C_CHROME
+    FRAME_COLOR = s("FRAME_COLOR").lower()
+    if FRAME_COLOR not in ("dim", "zone", "model", "model+zone", "brand", "red",
+                           "amber", "green", "blue", "purple", "tan", "money"):
+        FRAME_COLOR = "dim"
+    # zone/model are resolved per render (need meters/payload); until then dim.
+    C_CHROME = C_DIM if FRAME_COLOR in ("dim", "zone", "model", "model+zone") else \
+        {"brand": C_BRAND, "red": C_RED, "amber": C_AMBER, "green": C_GREEN,
+         "blue": C_BLUE, "purple": C_PURPLE, "tan": C_TAN, "money": C_MONEY}[FRAME_COLOR]
 
 apply_config(effective_conf())
 MODE = _MODE                                    # only "render" may notify
@@ -350,11 +420,15 @@ def render_line(segs):
         return " ".join(out)
     body = T["sep"].join(paint(s["text"], s["color"]) + paint(s["suffix"], C_DIM)
                          for s in segs)
-    line = T["open"] + body + T["close"]
+    opn, cls = T_OPEN, T_CLOSE
+    if T.get("frame"):
+        # unpainted side walls would sit brighter than the painted borders
+        opn, cls = paint(opn, C_CHROME), paint(cls, C_CHROME)
+    line = opn + body + cls
     if T["pad"] and WIDTH:
         short = WIDTH - vlen(line)
         if short > 0:
-            line = T["open"] + body + " " * short + T["close"]
+            line = opn + body + " " * short + cls
     if THEME_NAME == "mono":
         # mono promises plain ASCII — swap the typographic characters we emit.
         for a, b in (("≈", "~"), ("·", "-"), ("…", "..."), ("│", "|"), ("✓", "ok"),
@@ -367,7 +441,7 @@ def fit(segs):
     if not WIDTH or not segs:
         return segs
     cur = list(segs)
-    while vlen(render_line(cur)) > WIDTH:
+    while vlen(render_line(cur)) > WIDTH - T_PREFIX_W:
         droppable = [i for i, s in enumerate(cur) if s["prio"] < 90]
         if not droppable:
             break
@@ -377,18 +451,23 @@ def fit(segs):
 def clip(line):
     # Last defence for a very narrow terminal: even the protected segments can overflow,
     # and a wrapped status line costs two rows instead of one.
-    if not WIDTH or vlen(line) <= WIDTH:
+    budget = WIDTH - T_PREFIX_W
+    if not WIDTH or vlen(line) <= budget:
         return line
+    # Re-append the closing wall so a clipped frame/boxed row keeps its right edge.
+    cls = T_CLOSE or ""
+    tail = (paint(cls, C_CHROME) if T.get("frame") else cls) if cls else ""
+    budget -= vlen(cls)
     out, w, i = [], 0, 0
     while i < len(line):
         m = ANSI_RE.match(line, i)
         if m:
             out.append(m.group(0)); i = m.end(); continue
         cw = vlen(line[i])
-        if w + cw > WIDTH - 1:
+        if w + cw > budget - 1:
             break
         out.append(line[i]); w += cw; i += 1
-    return "".join(out) + "…\033[0m"
+    return "".join(out) + "…\033[0m" + tail
 
 # ---- small formatters -------------------------------------------------------
 HOUR = 3600
@@ -396,9 +475,19 @@ WINDOW_5H = 5 * HOUR
 WINDOW_7D = 7 * 24 * HOUR
 
 def color_for(p):
-    if p >= TH:            return C_RED
-    if p >= max(0, TH-15): return C_AMBER
-    return C_GREEN
+    # THE zone rule — meter text, heat cells, gutter bar and frame ring all share
+    # it: green below NOTICE, amber below THRESHOLD, red at or above.
+    return C_GREEN if p < NOTICE else (C_AMBER if p < TH else C_RED)
+
+def zone_color(meters):
+    return color_for(max((m["pct"] for m in meters), default=0.0))
+
+def model_color(d):
+    mid = ((d.get("model") or {}).get("id") or "").lower()
+    for key in ("fable", "mythos", "sonnet", "haiku", "opus"):
+        if key in mid:
+            return MODEL_COLORS["fable" if key == "mythos" else key]
+    return C_TAN
 
 def bar(p, n=None):
     if T_BAR is None:                         # dot style: a single status dot
@@ -421,8 +510,7 @@ def heat_bar(p, n=None):
     out = []
     for i in range(n):
         if i < f:
-            frac = (i + 1) / n * 100
-            col = C_GREEN if frac <= NOTICE else (C_AMBER if frac <= TH else C_RED)
+            col = color_for((i + 1) / n * 100)
             out.append(f"\033[38;5;{col}m{on}")
         else:
             out.append(f"\033[38;5;{C_DIM}m{off}")
@@ -472,12 +560,7 @@ def model_seg(d):
     md   = d.get("model") or {}
     mid  = (md.get("id") or "").lower()
     disp = (md.get("display_name") or "").strip()
-
-    col = C_TAN
-    for key in ("fable", "mythos", "sonnet", "haiku", "opus"):
-        if key in mid:
-            col = MODEL_COLORS["fable" if key == "mythos" else key]
-            break
+    col  = model_color(d)
 
     label = disp
     if not label:
@@ -671,16 +754,17 @@ def _take_lock(path, ttl):
 
 def _spawn_detached(lock_path, fn, ttl=30):
     # Run fn in a fully detached grandchild so a render never waits on it.
+    # Returns True when the work was actually handed off (lock taken, fork ok).
     if not _take_lock(lock_path, ttl):
-        return
+        return False
     try:
         pid = os.fork()
     except Exception:
         try: os.unlink(lock_path)
         except Exception: pass
-        return
+        return False
     if pid != 0:
-        return                               # parent: carry on rendering
+        return True                          # parent: carry on rendering
     try:
         os.setsid()
         if os.fork() != 0:
@@ -700,7 +784,6 @@ def _spawn_detached(lock_path, fn, ttl=30):
 USAGE_URL     = "https://api.anthropic.com/api/oauth/usage"
 RCACHE        = os.path.join(HOME, ".usage-remote-cache.json")
 RLOCK         = os.path.join(HOME, ".usage-remote-cache.lock")
-RCACHE_LEGACY = os.path.join(HOME, ".usage-fable-cache.json")
 R_TTL, R_MAX_AGE = 120, 1800
 
 def _epoch(v):
@@ -784,7 +867,7 @@ def _parse_usage(data):
 def refresh_remote_cache():
     import urllib.request, urllib.error
     prev = _read_json(RCACHE) or {}
-    keep = {k: prev.get(k) for k in ("fable", "credits", "dollars", "reading_at")}
+    keep = {k: prev.get(k) for k in ("fable", "buckets", "credits", "dollars", "reading_at")}
     now = time.time()
 
     tok = _oauth_token()
@@ -808,11 +891,8 @@ def refresh_remote_cache():
         return
 
     if RDEBUG:
-        try:
-            with open(os.path.join(HOME, ".usage-remote-debug.json"), "w") as fh:
-                json.dump(data, fh, indent=2)
-        except Exception:
-            pass
+        # 0600 like every other cache — the response describes the account.
+        _write_json(os.path.join(HOME, ".usage-remote-debug.json"), data)
 
     parsed = _parse_usage(data)
     if not parsed["buckets"] and parsed["credits"] is None:
@@ -826,11 +906,6 @@ def refresh_remote_cache():
 def remote_state():
     if not REMOTE:
         return {}
-    try:
-        if os.path.exists(RCACHE_LEGACY):
-            os.unlink(RCACHE_LEGACY)         # superseded by the v2 cache
-    except Exception:
-        pass
     try:
         c = _read_json(RCACHE) or {}
         if c.get("version") != 2:
@@ -869,8 +944,6 @@ def build_meters(d, remote, month_total=0.0, today_total=0.0):
     # what existing configs written before this did. "slot" records which SEGMENTS
     # entry the meter renders under, so reordering in the config is honest.
     buckets = (remote or {}).get("buckets")
-    if not buckets and isinstance((remote or {}).get("fable"), dict):
-        buckets = [remote["fable"]]           # cache written by an older version
     for b in buckets or []:
         if not isinstance(b, dict) or b.get("pct") is None:
             continue
@@ -983,6 +1056,12 @@ def build_warnings(meters, remote, now, d, eom_over=None):
     for m in meters:
         if m["pct"] >= 100:
             out.append(f"{m['label']} limit reached" + (" — burning usage credits" if burning else ""))
+    # ETAs right after hard limits: "runs out in ~2h" is the most actionable
+    # warning, so it must not be the one the two-slot cap always truncates.
+    for m in meters:
+        eta = eta_to_limit(m, now)
+        if eta is not None:
+            out.append(f"{m['label']} limit in ~{dur(eta)}")
     util = credits.get("utilization")
     if util is not None and credits.get("limit"):
         try:
@@ -995,10 +1074,6 @@ def build_warnings(meters, remote, now, d, eom_over=None):
     left = compact_left(d)
     if left is not None and left <= COMPACT_BAND:
         out.append("auto-compact now" if left <= 0 else f"auto-compact in ~{tokens(left)} tokens")
-    for m in meters:
-        eta = eta_to_limit(m, now)
-        if eta is not None:
-            out.append(f"{m['label']} limit in ~{dur(eta)}")
     return out[:2]
 
 # ---- spend reconstruction ---------------------------------------------------
@@ -1007,24 +1082,26 @@ def build_warnings(meters, remote, now, d, eom_over=None):
 # will be close to but not identical to Claude Code cost.total_cost_usd.
 SEARCH_COST = 10.0 / 1000    # web search is billed per request, on top of tokens
 
-def model_rates(model, speed=None):
+def model_rates(model, speed=None, ts=None):
     m = (model or "").lower()
     def per(i, o): return (i / 1e6, o / 1e6)
     if "haiku-3-5" in m or "haiku-3.5" in m: return per(0.80, 4.0)
     if "haiku-3" in m:                       return per(0.25, 1.25)
     if "haiku" in m:                         return per(1.0, 5.0)   # haiku 4.5
     if "fable" in m or "mythos" in m:        return per(10.0, 50.0) # fable/mythos 5
-    if "sonnet" in m:                        return per(3.0, 15.0)  # sonnet 4.6-5
+    if "sonnet-5" in m:
+        # Introductory rate through 2026-08-31, priced by the record's own timestamp.
+        return per(2.0, 10.0) if ts and ts[:10] <= "2026-08-31" else per(3.0, 15.0)
+    if "sonnet" in m:                        return per(3.0, 15.0)  # sonnet 4-4.6
     if "opus-4-1" in m or "opus-4-0" in m:   return per(15.0, 75.0)
     if "opus-5" in m or "opus-4-8" in m:
         # Fast mode runs the same model at premium rates where it is supported.
         return per(10.0, 50.0) if speed == "fast" else per(5.0, 25.0)
-    if "opus-4" in m or "opus" in m:         return per(5.0, 25.0)  # opus 4.5-4.7
-    return per(5.0, 25.0)
+    return per(5.0, 25.0)                    # opus 4-4.7 and unknown models
 
-def msg_cost(usage, model):
+def msg_cost(usage, model, ts=None):
     if not isinstance(usage, dict): return 0.0, 0
-    ir, orate = model_rates(model, usage.get("speed"))
+    ir, orate = model_rates(model, usage.get("speed"), ts)
     c  = (usage.get("input_tokens") or 0) * ir
     c += (usage.get("output_tokens") or 0) * orate
     c += (usage.get("cache_read_input_tokens") or 0) * ir * 0.1
@@ -1053,8 +1130,8 @@ def local_stamp(ts):
 def file_costs(path, start=0, prev=None):
     # Transcripts are append-only JSONL, so we resume from the byte offset we stopped at
     # instead of re-reading a file that can grow past 60 MB in a long session.
-    # Returns (days, hours, searches, bytes_consumed); a trailing partial line is left
-    # unconsumed so the next pass picks it up whole.
+    # Returns (days, hours, searches, toks, bytes_consumed); a trailing partial line
+    # is left unconsumed so the next pass picks it up whole.
     prev = prev or {}
     days = {day: dict(fams) for day, fams in (prev.get("days") or {}).items()}
     hours = dict(prev.get("hours") or {})
@@ -1083,7 +1160,7 @@ def file_costs(path, start=0, prev=None):
                 day, hour = local_stamp(o.get("timestamp") or "")
                 if not day:
                     continue
-                cost, n_search = msg_cost(usage, msg.get("model"))
+                cost, n_search = msg_cost(usage, msg.get("model"), o.get("timestamp"))
                 if n_search:
                     searches[day] = searches.get(day, 0) + n_search
                 cc = usage.get("cache_creation")
@@ -1102,22 +1179,30 @@ def file_costs(path, start=0, prev=None):
                 bucket[fam] = bucket.get(fam, 0.0) + cost
                 hours[hour] = hours.get(hour, 0.0) + cost
     except Exception:
-        return days, hours, searches, toks, start
+        # Return what was consumed, not start — resuming from start would re-add
+        # the lines already merged into the aggregates above.
+        return days, hours, searches, toks, consumed
     if len(hours) > 48:                       # only the last two days matter for burn
         hours = {k: hours[k] for k in sorted(hours)[-48:]}
     return days, hours, searches, toks, consumed
 
 def spend_all():
-    # Merged view over every transcript: per-day cost by model family, per-day tokens,
+    # Merged view over every transcript — including subagent and workflow transcripts
+    # nested under projects/<slug>/: per-day cost by model family, per-day tokens,
     # per-day searches, hourly buckets for the burn rate, and per-project totals
-    # (the project is simply the transcript's parent directory — no cache change).
+    # (the project is the projects/<slug> path component — no cache change).
     out = {"days": {}, "hours": {}, "searches": {}, "toks": {}, "projects": {}}
-    files = glob.glob(os.path.join(HOME, "projects", "*", "*.jsonl"))
+    base = os.path.join(HOME, "projects")
+    files = glob.glob(os.path.join(base, "**", "*.jsonl"), recursive=True)
     if not files:
         return out
     cache_path = os.path.join(HOME, ".usage-cost-cache.json")
     cache = _read_json(cache_path) or {}
-    entries = cache.get("files", {}) if cache.get("version") == 4 else {}
+    # Day/hour stamps are local time frozen at parse time; after a timezone change
+    # (travel, DST) old entries would silently mix two clocks — invalidate instead.
+    tz_off = time.localtime().tm_gmtoff
+    entries = cache.get("files", {}) \
+        if cache.get("version") == 4 and cache.get("tz") == tz_off else {}
 
     new_entries, dirty = {}, False
     for path in files:
@@ -1140,7 +1225,7 @@ def spend_all():
             dirty = True
         new_entries[path] = {"mtime": st.st_mtime, "size": st.st_size, "offset": consumed,
                              "days": days, "hours": hours, "searches": searches, "toks": toks}
-        proj = os.path.basename(os.path.dirname(path))
+        proj = os.path.relpath(path, base).split(os.sep)[0]
         for day, fams in (days or {}).items():
             if isinstance(fams, dict):
                 agg = out["days"].setdefault(day, {})
@@ -1160,8 +1245,13 @@ def spend_all():
             for k in agg:
                 agg[k] += t.get(k, 0)
 
-    if dirty or len(new_entries) != len(entries):
-        _write_json(cache_path, {"version": 4, "files": new_entries})
+    # A live session marks the cache dirty on every render (its transcript grew);
+    # throttle those rewrites — a skipped write only means re-parsing the same
+    # few KB of tail next time. New/removed files always write through.
+    if len(new_entries) != len(entries) or \
+            (dirty and time.time() - (cache.get("written_at") or 0) > 5):
+        _write_json(cache_path, {"version": 4, "tz": tz_off,
+                                 "written_at": time.time(), "files": new_entries})
     return out
 
 def project_label(slug, all_slugs):
@@ -1240,7 +1330,10 @@ def dollars_seg(remote):
 
 # ---- report -----------------------------------------------------------------
 def run_report():
-    days = int(os.environ.get("REPORT_DAYS") or 30)
+    try:
+        days = max(1, int(os.environ.get("REPORT_DAYS") or 30))
+    except ValueError:
+        days = 30
     fmt = (os.environ.get("REPORT_FORMAT") or "text").lower()
     data = spend_all()
     now_local = datetime.now().astimezone()
@@ -1292,10 +1385,17 @@ def run_report():
                      "tokens": sum(tok.values()) if tok else 0})
 
     if fmt == "json":
-        print(json.dumps({"days": rows,
-                          "month_to_date": round(sum(
-                              sum(f.values()) for day, f in data["days"].items()
-                              if day.startswith(now.strftime("%Y-%m"))), 2)}, indent=2))
+        mtd = sum(sum(f.values()) for day, f in data["days"].items()
+                  if day.startswith(now.strftime("%Y-%m")))
+        last7 = [sum(data["days"].get((now - timedelta(days=i)).strftime("%Y-%m-%d"), {}).values())
+                 for i in range(7)]
+        proj_val = eom_projection(mtd, now_local)
+        print(json.dumps({"generated_at": now.isoformat(),
+                          "days": rows,
+                          "month_to_date": round(mtd, 2),
+                          "last7_avg_per_day": round(sum(last7) / 7, 2),
+                          "projected_month_end": round(proj_val, 2) if proj_val else None},
+                         indent=2))
         return
     cols = ["day"] + fams + ["total", "searches", "cache_pct", "tokens"]
     if fmt == "csv":
@@ -1344,8 +1444,32 @@ def run_doctor():
          "" if os.path.exists(conf_path) else "not created yet; defaults in use")
     print(f"   effective: THEME={THEME_NAME} PALETTE={PALETTE} LINES={LINES} STYLE={STYLE} "
           f"THRESHOLD={TH:.0f} NOTICE={NOTICE:.0f} GIT={GIT} REMOTE={int(REMOTE)} NOTIFY={NOTIFY}")
+    ec = effective_conf()
+    tint_req = str(ec.get("TINT", "off")).strip().lower()
+    print(f"   looks    : FRAME={str(ec.get('FRAME')).lower()} FRAME_TITLE={FRAME_TITLE} "
+          f"FRAME_COLOR={FRAME_COLOR} TINT={tint_req} ICONS={ICON_MODE} "
+          f"BAR={str(ec.get('BAR')).lower()} BARW={BARW} BAR_HEAT={int(bool(BAR_HEAT))} RULE={int(RULE)}")
     print(f"   segments : {','.join(SEGS)}")
     print(f"   line2    : {','.join(LINE2)}")
+    if tint_req not in ("", "off", "0") and TINT is None:
+        line(na, "TINT ignored", f"'{THEME_NAME}' is not a sep theme (plain/boxed/frame/dots/prompt/gutter)")
+    heat_req = str(ec.get("BAR_HEAT", "0")).strip().lower() not in ("", "0", "false", "no", "off")
+    if heat_req and not BAR_HEAT:
+        line(na, "BAR_HEAT ignored", f"'{THEME_NAME}' is not a sep theme")
+    raw = _load_conf_file()
+    unknown = sorted(k for k in raw if k not in DEFAULTS)
+    if unknown:
+        line(na, "unknown conf keys", ", ".join(unknown) + " — ignored (typo?)")
+    valid = {"THEME": set(THEMES), "PALETTE": set(PALETTES), "FRAME": set(FRAMES),
+             "ICONS": {"unicode", "nerd", "none"}, "STYLE": {"adaptive", "full", "compact"},
+             "FRAME_TITLE": {"off", "session", "dir"},
+             "FRAME_COLOR": {"dim", "zone", "model", "model+zone", "brand", "red",
+                             "amber", "green", "blue", "purple", "tan", "money"},
+             "NOTIFY": {"off", "threshold", "all"}, "GIT": {"off", "branch", "dirty"}}
+    for k, vals in valid.items():
+        v = (raw.get(k) or "").strip().lower()
+        if v and v not in vals:
+            line(na, f"{k}={raw[k]}", "not a valid value — the default is used")
     line(ok if WIDTH else na, "terminal width",
          f"COLUMNS={WIDTH}" if WIDTH else "not set here; Claude Code sets it when it runs the statusline")
 
@@ -1362,7 +1486,7 @@ def run_doctor():
         line(bad, "settings.json", str(e))
 
     print("\ndata")
-    files = glob.glob(os.path.join(HOME, "projects", "*", "*.jsonl"))
+    files = glob.glob(os.path.join(HOME, "projects", "**", "*.jsonl"), recursive=True)
     size = sum(os.path.getsize(f) for f in files if os.path.exists(f))
     line(ok if files else bad, "transcripts", f"{len(files)} files, {size / 1e6:.0f} MB")
     cc = _read_json(os.path.join(HOME, ".usage-cost-cache.json")) or {}
@@ -1370,6 +1494,20 @@ def run_doctor():
         line(ok, "cost cache", f"v4, {len(cc.get('files', {}))} files tracked")
     else:
         line(na, "cost cache", f"version {cc.get('version', 'missing')} — next render re-reads everything once")
+    try:
+        # A new model family would be priced at the Opus fallback silently — surface it.
+        ids = set()
+        for p in sorted(files, key=os.path.getmtime)[-3:]:
+            with open(p, "rb") as fh:
+                fh.seek(max(0, os.path.getsize(p) - 200_000))
+                ids |= set(re.findall(rb'"model"\s*:\s*"([^"]+)"', fh.read()))
+        odd = sorted(b.decode("utf-8", "replace") for b in ids
+                     if b != b"<synthetic>" and not any(
+                         t in b.lower() for t in (b"haiku", b"fable", b"mythos", b"sonnet", b"opus")))
+        if odd:
+            line(na, "unrecognized models", ", ".join(odd) + " — priced at the Opus fallback")
+    except Exception:
+        pass
 
     print("\nremote (Fable 5 + usage credits)")
     if not REMOTE:
@@ -1423,15 +1561,26 @@ def run_doctor():
 
     print("\nglyphs — if any of these are boxes, pick a different theme")
     print("   plain/full bars  ▉▉▉░░░░░")
-    print("   boxed bars       ▰▰▰▱▱▱▱▱   frame │ ╭╮╰╯   dots ·   joins ╱ │")
-    print("   bar styles       " + "  ".join(f"{k} {v[0]}{v[0]}{v[1]}{v[1]}" for k, v in BARS.items()))
+    print("   boxed bars       ▰▰▰▱▱▱▱▱   frame │ ╭╮╰╯ ┌┐ ╔╗ ┏┓ ╌   dots ·   joins ╱ │")
+    print("   frame titles     ┤├ ╡╞ ┫┣   prompt ╭─ ├─ ╰─ ╶─   gutter ▌")
+    print("   bar styles       " + "  ".join(f"{k} {v[0]}{v[0]}{v[1]}{v[1]}" for k, v in BARS.items() if v) + "  dot ●")
     print("   powerline   · slant  · capsule  · icons    (need a Nerd Font)")
     print("   icons            ⚡ ⑂ 📁 🔍 ⚠ ⏱   sparkline ▁▂▃▄▅▆▇█")
+    if sys.stdout.isatty():
+        # Swatches only on a live terminal; piped doctor output stays ANSI-free.
+        print("\npalettes")
+        for name, p in PALETTES.items():
+            dots = " ".join("\033[38;5;%dm●\033[0m" % p[k]
+                            for k in ("red", "amber", "green", "brand", "money",
+                                      "purple", "blue", "tan", "dim"))
+            print("   %-11s %s" % (name, dots))
 
 if MODE == "report":
     run_report(); sys.exit(0)
 if MODE == "doctor":
     run_doctor(); sys.exit(0)
+if MODE == "themes":
+    print(" ".join(THEMES)); sys.exit(0)      # single source of truth for the gallery
 
 # ---- notifications (opt-in) -------------------------------------------------
 # Fires on the *transition*, not on the state: once a key stops being true it re-arms.
@@ -1480,18 +1629,29 @@ def maybe_notify(meters, remote, d, now):
         active = {k for k, _ in events}
         due = [(k, msg) for k, msg in events if now - float(fired.get(k) or 0) > NCOOLDOWN]
         kept = {k: v for k, v in fired.items() if k in active}   # inactive keys re-arm
-        for k, _ in due:
-            kept[k] = now
-        if kept != fired:
-            _write_json(NSTATE, {"version": 1, "fired": kept})
         if due:
             text = "; ".join(msg for _, msg in due)
-            _spawn_detached(NLOCK, lambda: _deliver("Claude usage", text), ttl=5)
+            # Stamp the cooldown only when the worker actually spawned — a lost
+            # lock race must not mute the key for NCOOLDOWN with nothing shown.
+            # ttl outlives _deliver's 10s osascript timeout.
+            if _spawn_detached(NLOCK, lambda: _deliver("Claude usage", text), ttl=15):
+                for k, _ in due:
+                    kept[k] = now
+        if kept != fired:
+            _write_json(NSTATE, {"version": 1, "fired": kept})
     except Exception:
         pass
 
 # ---- assemble ---------------------------------------------------------------
-KNOWN1 = {"title", "model", "effort", "dir", "git", "pr", "ctx", "time", "vim", "agent", "cmd"}
+def frame_title(d):
+    # Text embedded in the frame's top border; sources mirror the title/dir segments.
+    if FRAME_TITLE == "session":
+        return (d.get("session_name") or "").strip()
+    if FRAME_TITLE == "dir":
+        ws = d.get("workspace") or {}
+        return ((ws.get("repo") or {}).get("name")
+                or os.path.basename((ws.get("project_dir") or ws.get("current_dir") or "").rstrip("/")))
+    return ""
 
 def render_status(d):
     now = time.time()
@@ -1499,9 +1659,9 @@ def render_status(d):
 
     _now = datetime.now().astimezone()
     TODAY, MONTH = _now.strftime("%Y-%m-%d"), _now.strftime("%Y-%m")
-    spend = {"days": {}, "hours": {}, "searches": {}, "toks": {}}
+    spend = {"days": {}, "hours": {}, "searches": {}, "toks": {}, "projects": {}}
     need_spend = any(k in LINE2 for k in ("today", "models", "month", "burn",
-                                          "spark", "search", "cache")) \
+                                          "spark", "search", "cache", "proj", "eom")) \
         or ("budget" in SEGS and (BUDGET_MONTH > 0 or BUDGET_DAY > 0))
     if need_spend:
         try:
@@ -1516,6 +1676,17 @@ def render_status(d):
     searches_today = spend["searches"].get(TODAY, 0)
 
     meters = build_meters(d, remote, month_total, today_total)
+    if FRAME_COLOR in ("zone", "model", "model+zone"):
+        global C_CHROME
+        if FRAME_COLOR == "model":
+            C_CHROME = model_color(d)
+        elif FRAME_COLOR == "zone":
+            C_CHROME = zone_color(meters)
+        else:
+            # model+zone: the model's identity color while every meter is still
+            # in the green band; the zone color takes over once one heats up.
+            worst = max((m["pct"] for m in meters), default=0.0)
+            C_CHROME = model_color(d) if worst < NOTICE else zone_color(meters)
     slots = meter_slots(meters)
     ws = d.get("workspace") or {}
 
@@ -1649,12 +1820,36 @@ def render_status(d):
     else:
         out = [render_line(fit(line1)), render_line(fit(line2))]
     out = [clip(l) for l in out if l.strip()]
+    if TINT is not None and out:
+        # Background band under the content rows only: re-arm after every embedded
+        # reset (paint, heat cells, clip's tail); the chrome added below stays clear.
+        band = "\033[48;5;%dm" % TINT
+        out = [band + l.replace("\033[0m", "\033[0m" + band) + "\033[0m" for l in out]
+    if T.get("connector") and out:
+        # p10k-style connector; a lone row gets a stub instead of a dangling corner.
+        pre = ["╶─ "] if len(out) == 1 else \
+              ["╭─ "] + ["├─ "] * (len(out) - 2) + ["╰─ "]
+        out = [paint(p, C_CHROME) + l for p, l in zip(pre, out)]
+    elif T.get("gutter") and out:
+        # One accent bar, colored by the worst zone across every meter.
+        gc = zone_color(meters)
+        out = [paint("▌ ", gc) + l for l in out]
     if T.get("frame") and out:
-        # A real box: rounded corners, top and bottom borders. Claude Code trims
+        # A real box: corners and borders from the FRAME charset. Claude Code trims
         # each line, but the borders aren't whitespace, so they survive.
+        tl, hz, tr, bl, br, _, tcl, tcr = FRAME_CH
         w = WIDTH or (max(vlen(l) for l in out) if out else 80)
-        out = [paint("╭" + "─" * max(0, w - 2) + "╮", C_DIM)] + out + \
-              [paint("╰" + "─" * max(0, w - 2) + "╯", C_DIM)]
+        top = tl + hz * max(0, w - 2) + tr
+        title = frame_title(d)
+        if title and w >= 12:
+            room = w - 8                          # tl hz tcl sp <title> sp tcr fill≥1 tr
+            if vlen(title) > room:
+                while title and vlen(title) > room - 1:
+                    title = title[:-1]
+                title += "…"
+            top = (tl + hz + tcl + " " + title + " " + tcr
+                   + hz * max(0, w - 7 - vlen(title)) + tr)
+        out = [paint(top, C_CHROME)] + out + [paint(bl + hz * max(0, w - 2) + br, C_CHROME)]
     elif RULE and out:
         # A quiet horizontal rule as the last line: the visual boundary between this
         # usage block and Claude Code's own footer below it.
@@ -1672,15 +1867,30 @@ CONF_TEMPLATE = """\
 # Every key can be overridden per-session with the matching CLAUDE_USAGE_<KEY> env var.
 # Re-run the configurator any time:  bash ~/.claude/statusline-usage.sh --configure
 
-# plain · boxed · dots · mono (ASCII, no color)
-# powerline · slant · capsule (need a Nerd Font) · badge (colored blocks, any font)
+# plain · boxed · frame · dots · prompt · gutter · mono (ASCII, no color)
+# badge · soft · rainbow (block styles, any font)
+# powerline · slant · capsule (best with a Nerd Font; degrade cleanly without)
 THEME={THEME}
 
-# Color palette: default · ocean · sunset · forest
+# frame theme only — border charset: round ╭─╮ · sharp ┌─┐ · double ╔═╗ · heavy ┏━┓
+# · dashed ╭╌╮. FRAME_TITLE embeds a name in the top border: off · session · dir
+FRAME={FRAME}
+FRAME_TITLE={FRAME_TITLE}
+
+# frame borders + prompt connectors: dim · zone (the worst meter's green/amber/red,
+# a one-glance health ring) · model (the current model's color) · model+zone (model
+# color until a meter heats up) · or a hue: brand red amber green blue purple tan money
+FRAME_COLOR={FRAME_COLOR}
+
+# Color palette: default · ocean · sunset · forest · nord · dracula · gruvbox · catppuccin
 PALETTE={PALETTE}
 
-# unicode = ⚡ ⑂ ⏱ symbols that render in any font (also swaps powerline arrows/caps
-# for ▶ and ▐ ▌) · nerd = native Nerd Font glyphs (needs the font) · none = text only
+# Background band behind the lines, sep themes only (plain/boxed/frame/dots/prompt/gutter):
+# off · ink · coal · graphite · slate · navy · ocean · plum · forest · any 0-255 index
+TINT={TINT}
+
+# unicode = ⚡ ⑂ ⏱ symbols that render in any font (powerline/slant/capsule fall back
+# to hard edges and ╱) · nerd = native Nerd Font glyphs (needs the font) · none = text
 ICONS={ICONS}
 
 # 1 = draw a dim ─ rule as the last line, separating usage from Claude Code's footer
@@ -1712,18 +1922,22 @@ LINES={LINES}
 STYLE={STYLE}
 
 # At or above THRESHOLD a meter turns red, gets a bar and a warning marker.
+# Between NOTICE and THRESHOLD it is amber, below NOTICE green — one zone rule
+# shared by meter text, heat bars, the gutter bar and FRAME_COLOR=zone.
 THRESHOLD={THRESHOLD}
 # adaptive only: below NOTICE a meter is hidden. The highest one is always shown.
 NOTICE={NOTICE}
 
-# Line 1 segments, in order: title, model, effort, git, dir, pr, 5h, 7d, quota, ctx, time
+# Line 1 segments, in order: title, model, effort, git, dir, pr, vim, agent, cmd,
+# 5h, 7d, quota, budget, ctx, time
 # (quota = every per-model window the account has; or name one: fable, opus, sonnet)
 SEGMENTS={SEGMENTS}
 
 # Line 2 parts, in order:
 #   session = this session   today/models = today, split per model   month = month to date
-#   burn = $/h   spark = last 7 days   cache = prompt-cache hit rate
-#   search = web searches   credits = usage credits (REMOTE)   warn = up to two warnings
+#   eom = month-end forecast   proj = priciest project today   burn = $/h
+#   spark = last 7 days   cache = prompt-cache hit rate   search = web searches
+#   credits = usage credits (REMOTE)   warn = up to two warnings
 LINE2={LINE2}
 
 # off = no git segment · branch = branch name only (free) · dirty = also count changes
@@ -1732,6 +1946,8 @@ GIT={GIT}
 # 1 = also fetch per-model quotas (Fable 5, Opus, ...) and the usage-credit balance
 # from api.anthropic.com. The only part of the script that touches the network.
 REMOTE={REMOTE}
+# 1 = write each successful /usage response to ~/.claude/.usage-remote-debug.json
+REMOTE_DEBUG={REMOTE_DEBUG}
 
 # Desktop notification when something crosses THRESHOLD, fired once per crossing:
 # off | threshold | all (all also warns when a limit is projected to run out)
@@ -1777,6 +1993,11 @@ TUI_ENUMS = {
     "ICONS": ["unicode", "nerd", "none"],
     "BAR": ["theme", "boxes", "slant", "shade", "line", "dots", "mini", "bars", "ascii", "dot"],
     "BAR_HEAT": ["0", "1"],
+    "FRAME": ["round", "sharp", "double", "heavy", "dashed"],
+    "FRAME_TITLE": ["off", "session", "dir"],
+    "FRAME_COLOR": ["dim", "zone", "model", "model+zone", "brand", "red",
+                    "amber", "green", "blue", "purple", "tan", "money"],
+    "TINT": ["off", "ink", "coal", "graphite", "slate", "navy", "ocean", "plum", "forest"],
     "LINES": ["2", "1"], "STYLE": ["adaptive", "full", "compact"],
     "RULE": ["0", "1"],
     "GIT": ["branch", "dirty", "off"], "REMOTE": ["0", "1"],
@@ -1788,7 +2009,11 @@ TUI_HELP = {
     "ICONS": "unicode = ⚡ ⑂ ⏱ everywhere · nerd = Nerd Font glyphs (needs the font!) · none = text only",
     "BAR": "meter bar style: theme keeps each theme's own · ▉░ ▰▱ █▒ ━╌ ●○ ▪▫ ▮▯ #-",
     "BARW": "meter bar length in cells (4-16)",
-    "BAR_HEAT": "color bar cells by zone (green/amber/red) — sep themes only (plain/boxed/dots/frame)",
+    "BAR_HEAT": "color bar cells by zone (green/amber/red) — sep themes only (plain/boxed/dots/frame/prompt/gutter)",
+    "FRAME": "frame theme only: border charset — round ╭─ · sharp ┌─ · double ╔═ · heavy ┏━ · dashed ╭╌",
+    "FRAME_TITLE": "frame theme only: session name (/rename) or repo/dir name in the top border",
+    "FRAME_COLOR": "frame/prompt chrome: dim · zone = worst meter's color · model = current model's color · model+zone = model until a meter heats up · or a hue",
+    "TINT": "dark background band behind the lines — sep themes only; any 0-255 index works in the conf file",
     "eom": "straight-line month-end forecast; red + warning when it beats your monthly budget",
     "proj": "the most expensive project today (from transcript folders)",
     "BUDGET_MONTH": "monthly $ target: adds a budget meter with $ left, warnings and a runs-out projection (0 = off)",
@@ -1844,16 +2069,65 @@ def run_tui():
         return items
     items1, items2 = mklist("SEGMENTS", CATALOG1), mklist("LINE2", CATALOG2)
 
-    opt_keys = ["THEME", "PALETTE", "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE",
-                "THRESHOLD", "NOTICE", "RULE", "BUDGET_MONTH", "BUDGET_DAY",
+    opt_keys = ["THEME", "FRAME", "FRAME_TITLE", "FRAME_COLOR", "TINT", "PALETTE",
+                "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE", "NOTICE",
+                "THRESHOLD", "RULE", "BUDGET_MONTH", "BUDGET_DAY",
                 "GIT", "REMOTE", "NOTIFY"]
-    rows = [("opt", k) for k in opt_keys]
-    rows.append(("head", "Line 1   space toggle · K/J move up/down"))
-    rows += [("seg", (items1, i)) for i in range(len(items1))]
-    rows.append(("head", "Line 2"))
-    rows += [("seg", (items2, i)) for i in range(len(items2))]
+    # Rows drawn as a tree under the row whose value decides their visibility.
+    CHILD_OF = {"FRAME": "THEME", "FRAME_TITLE": "THEME", "FRAME_COLOR": "THEME",
+                "TINT": "THEME", "BARW": "BAR", "BAR_HEAT": "BAR", "NOTICE": "STYLE"}
 
-    LABELS = {"THEME": "Theme", "PALETTE": "Palette", "ICONS": "Icons",
+    def visible(k):
+        # Only rows the current config can actually feel; mirrors apply_config's gates.
+        th = conf.get("THEME", "plain").lower()
+        t = THEMES[th if th in THEMES else "plain"]
+        sep_color = t.get("mode", "sep") == "sep" and t["color"]
+        if k in ("FRAME", "FRAME_TITLE"):
+            return bool(t.get("frame"))
+        if k == "FRAME_COLOR":
+            return bool(t.get("frame") or t.get("connector"))
+        if k in ("TINT", "BAR_HEAT"):
+            return sep_color
+        if k == "BARW":
+            return conf.get("BAR", "theme").lower() != "dot"
+        if k == "NOTICE":
+            return conf.get("STYLE", "adaptive").lower() not in ("full", "compact")
+        return True
+
+    def build_rows():
+        r = [("opt", k) for k in opt_keys if visible(k)]
+        r.append(("head", "Line 1   space toggle · K/J move up/down"))
+        r += [("seg", (items1, i)) for i in range(len(items1))]
+        r.append(("head", "Line 2"))
+        r += [("seg", (items2, i)) for i in range(len(items2))]
+        return r
+
+    def row_id(row):
+        # Stable identity across rebuilds — the cursor survives rows appearing/vanishing.
+        kind, ref = row
+        if kind == "seg":
+            lst, i = ref
+            return ("seg", 0 if lst is items1 else 1, i)
+        return (kind, ref)
+
+    def resolve(rows, cid, prev):
+        ids = [row_id(r) for r in rows]
+        if cid in ids:
+            return ids.index(cid)
+        cand = [i for i, r in enumerate(rows) if r[0] != "head"]
+        return min(cand, key=lambda i: abs(i - prev))
+
+    def move(rows, idx, step):
+        i = idx
+        for _ in range(len(rows)):
+            i = (i + step) % len(rows)
+            if rows[i][0] != "head":
+                return i
+        return idx
+
+    LABELS = {"THEME": "Theme", "FRAME": "Frame", "FRAME_TITLE": "Frame title",
+              "FRAME_COLOR": "Frame color", "TINT": "Tint",
+              "PALETTE": "Palette", "ICONS": "Icons",
               "BAR": "Bar", "BARW": "Bar width", "BAR_HEAT": "Heat bar",
               "LINES": "Lines", "STYLE": "Density", "THRESHOLD": "Threshold",
               "NOTICE": "Notice", "RULE": "Rule line", "GIT": "Git",
@@ -1868,50 +2142,85 @@ def run_tui():
         c["LINE2"] = ",".join(k for k, on in items2 if on)
         return c
 
+    pv_cache = {}
+
     def preview_lines(width):
+        # Memoized: cursor-only keystrokes must not re-scan every transcript.
+        sc = state_conf()
+        ck = (width, tuple(sorted(sc.items())))
+        hit = pv_cache.get(ck)
+        if hit is not None:
+            return hit
         globals()["WIDTH"] = max(20, width)
         try:
-            apply_config(state_conf())
+            apply_config(sc)
             text, _, _, _ = render_status(_sample_payload())
-            return text.split("\n") or [""]
+            out = text.split("\n") or [""]
         except Exception as e:
-            return ["(preview failed: %s)" % type(e).__name__]
+            out = ["(preview failed: %s)" % type(e).__name__]
+        if len(pv_cache) >= 32:
+            pv_cache.clear()
+        pv_cache[ck] = out
+        return out
 
+    rows = build_rows()
     cursor, top, msg = 0, 0, ""
+    cur_id, prev_idx = row_id(rows[0]), 0
     preset_idx = -1
+    saved_state, ever_saved, pending = state_conf(), False, ""
+    avail_last, last_size = 10, None
 
     def draw():
+        nonlocal top, last_size
         try:
             cols, lines_n = os.get_terminal_size(tout.fileno())
         except OSError:
             cols, lines_n = 80, 24
+        last_size = (cols, lines_n)
         buf = ["\033[H\033[2J"]
         if lines_n < 10 or cols < 40:
             buf.append("Terminal too small for the configurator — enlarge the window,\r\n"
                        "or press q to quit.\r\n")
             tout.write("".join(buf)); tout.flush()
-            return
+            return None
         pv = preview_lines(cols - 2)
         head_h, foot_h = 2, 4 + len(pv)
         avail = max(3, lines_n - head_h - foot_h)
 
-        nonlocal top
         if cursor < top: top = cursor
         if cursor >= top + avail: top = cursor - avail + 1
 
-        buf.append("\033[1m Claude statusline — configurator\033[0m"
-                   "\033[38;5;245m   ↑↓ move · ←→ change · space toggle · K/J reorder"
-                   " · p/P presets · s save · q quit\033[0m\r\n")
-        buf.append("\033[38;5;238m" + "─" * (cols - 1) + "\033[0m\r\n")
-        brand, green = PALETTES[PALETTE]["brand"], PALETTES[PALETTE]["green"]
+        dirty = state_conf() != saved_state
+        title = " Claude statusline — configurator"
+        mod = " · modified" if dirty else ""
+        keys = "   ↑↓ move · ←→ change · space toggle · K/J reorder · p/P presets · s save · q quit"
+        keys = keys[:max(0, cols - 1 - len(title) - len(mod))]
+        buf.append("\033[1m" + title + "\033[0m"
+                   + ("\033[38;5;179m" + mod + "\033[0m" if mod else "")
+                   + "\033[38;5;245m" + keys + "\033[0m\r\n")
+
+        def rule(cnt, arrow):
+            # Scroll hint lives inside the rule so the layout height never changes.
+            txt = (" %s %d more " % (arrow, cnt)) if cnt > 0 else ""
+            body = "──" + ("\033[38;5;245m%s\033[38;5;238m" % txt if txt else "")
+            return ("\033[38;5;238m" + body
+                    + "─" * max(0, cols - 3 - len(txt)) + "\033[0m\r\n")
+
+        buf.append(rule(top, "↑"))
+        pal = PALETTES.get(conf.get("PALETTE", "default").lower(), PALETTES["default"])
+        brand, green = pal["brand"], pal["green"]
         CHIP = "\033[48;5;%dm\033[38;5;232m %%s \033[0m" % brand
         # The highlight background wraps ONLY the label and is closed before anything
         # else is drawn — re-arming it after resets is what smeared the option row.
-        def label_cell(text, cur, w=13):
+        # branch is the tree connector ("├ "/"└ ") for child rows; the label narrows
+        # by its width so the value column stays aligned across the whole list.
+        def label_cell(text, cur, branch=""):
+            w = 13 - len(branch)
+            pre = ("\033[38;5;245m%s\033[0m" % branch) if branch else ""
             if cur:
-                return ("\033[38;5;%dm▸\033[0m" % brand
+                return ("\033[38;5;%dm▸\033[0m" % brand + pre
                         + "\033[48;5;237m\033[1m %-*s \033[0m" % (w, text))
-            return "  %-*s " % (w, text)
+            return "  " + pre + "%-*s " % (w, text)
         for idx in range(top, min(len(rows), top + avail)):
             kind, ref = rows[idx]
             cur = (idx == cursor)
@@ -1922,59 +2231,113 @@ def run_tui():
                 if ref in TUI_ENUMS:
                     opts = TUI_ENUMS[ref]
                     names = [ENUM_NAMES.get(ref, {}).get(o, o) for o in opts]
-                    shown_val = ENUM_NAMES.get(ref, {}).get(val if val in opts else opts[0], val)
+                    sel = opts.index(val) if val in opts else None
                     plain_len = 18 + sum(len(n) + 3 for n in names)
-                    if plain_len > cols:             # narrow terminal: chip only
-                        body = CHIP % shown_val
+                    if sel is None:
+                        # hand-edited value outside the enum (raw TINT index, custom
+                        # entry): still its own chip, never a silently blank row
+                        body = ("\033[38;5;245m‹\033[0m " + CHIP % val
+                                + " \033[38;5;245m›\033[0m")
+                    elif plain_len > cols:           # narrow terminal: chip with ‹ ›
+                        body = ("\033[38;5;245m‹\033[0m " + CHIP % names[sel]
+                                + " \033[38;5;245m›\033[0m")
                     else:
                         # selected value = colored chip, the rest dim, no background
-                        body = " ".join(CHIP % n if n == shown_val
+                        body = " ".join(CHIP % n if j == sel
                                         else "\033[38;5;245m %s \033[0m" % n
-                                        for n in names)
+                                        for j, n in enumerate(names))
                 else:
                     body = CHIP % val
-                buf.append(" %s %s\r\n" % (label_cell(LABELS[ref], cur), body))
+                    if ref in TUI_NUMS:
+                        body += " \033[38;5;245m%d–%d\033[0m" % TUI_NUMS[ref][1:]
+                branch = ""
+                par = CHILD_OF.get(ref)
+                if par:
+                    sibs = [k for k in opt_keys if CHILD_OF.get(k) == par and visible(k)]
+                    branch = "└ " if ref == sibs[-1] else "├ "
+                buf.append(" %s %s\r\n" % (label_cell(LABELS[ref], cur, branch), body))
             else:
                 lst, i = ref
                 k, on = lst[i]
+                off_note = ""
+                if k in ("quota", "credits") and \
+                        conf.get("REMOTE", "0").lower() in ("", "0", "false", "no", "off"):
+                    off_note = "\033[38;5;245m (needs Remote — off)\033[0m"
                 if cur:
                     # one self-contained span: fg changes inside use 38;5;N / 39,
                     # a single reset closes the whole cell
                     box = ("\033[38;5;%dm[x]\033[39m" % green) if on else "[ ]"
-                    buf.append("   \033[38;5;%dm▸\033[0m\033[48;5;237m\033[1m %s %s \033[0m\r\n"
-                               % (brand, box, k))
+                    buf.append("   \033[38;5;%dm▸\033[0m\033[48;5;237m\033[1m %s %s \033[0m%s\r\n"
+                               % (brand, box, k, off_note))
+                elif off_note:
+                    box = "[x]" if on else "[ ]"
+                    buf.append("     \033[38;5;245m%s %s\033[0m%s\r\n" % (box, k, off_note))
                 else:
                     box = ("\033[38;5;%dm[x]\033[0m" % green) if on else "\033[38;5;245m[ ]\033[0m"
                     buf.append("     %s %s\r\n" % (box, k))
-        buf.append("\033[38;5;238m" + "─" * (cols - 1) + "\033[0m\r\n")
+        buf.append(rule(len(rows) - (top + avail), "↓"))
         kind_c, ref_c = rows[cursor]
         help_key = ref_c if kind_c == "opt" else (ref_c[0][ref_c[1]][0] if kind_c == "seg" else "")
-        help_txt = TUI_HELP.get(help_key, "")
-        if help_txt:
-            buf.append("\033[38;5;245m " + help_txt[:cols - 2] + "\033[0m\r\n")
+        # Always emit the help line, even empty — a stable layout doesn't jump.
+        buf.append("\033[38;5;245m " + TUI_HELP.get(help_key, "")[:cols - 2] + "\033[0m\r\n")
         buf.append("\033[38;5;245m preview — live, with your real spend numbers"
                    + ("   " + msg if msg else "") + "\033[0m\r\n")
         for line in pv:
             buf.append(" " + line + "\r\n")
         tout.write("".join(buf)); tout.flush()
+        return avail
+
+    KEYMAP = {b"A": "up", b"B": "down", b"C": "right", b"D": "left",
+              b"H": "home", b"F": "end", b"5~": "pgup", b"6~": "pgdn",
+              b"1~": "home", b"7~": "home", b"4~": "end", b"8~": "end"}
 
     def read_key():
+        # Consume WHOLE escape sequences; unknown ones are ignored ("") — an
+        # unmapped PgUp must never decode as "esc" and quit the editor.
         b = tin.read(1)
         if not b:
             return ""
-        if b == b"\x1b":
-            seq = b""
-            while len(seq) < 2 and select.select([tin], [], [], 0.05)[0]:
-                seq += tin.read(1)
-            return {"[A": "up", "[B": "down", "[C": "right", "[D": "left"}.get(
-                seq.decode("latin1", "replace"), "esc")
-        return b.decode("latin1", "replace")
+        if b != b"\x1b":
+            return b.decode("latin1", "replace")
+        if not select.select([tin], [], [], 0.05)[0]:
+            return "esc"                              # bare ESC
+        nxt = tin.read(1)
+        if nxt == b"O":                               # SS3 (application cursor keys)
+            fin = tin.read(1) if select.select([tin], [], [], 0.05)[0] else b""
+            return KEYMAP.get(fin, "")
+        if nxt != b"[":
+            return ""                                 # Alt-chord etc.
+        seq = b""
+        while select.select([tin], [], [], 0.05)[0]:
+            c = tin.read(1)
+            seq += c
+            if 0x40 <= c[0] <= 0x7E:                  # CSI final byte
+                break
+        return KEYMAP.get(seq, "")
+
+    def wait_key():
+        # Block on input, but wake up every 0.4s to notice a window resize.
+        nonlocal last_size
+        while True:
+            if select.select([tin], [], [], 0.4)[0]:
+                k = read_key()
+                if k != "":
+                    return k
+                continue
+            try:
+                size = tuple(os.get_terminal_size(tout.fileno()))
+            except OSError:
+                size = None
+            if size != last_size:
+                return None                           # redraw tick
 
     def cycle(key, step):
         if key in TUI_ENUMS:
             opts = TUI_ENUMS[key]
-            cur = conf[key] if conf[key] in opts else opts[0]
-            conf[key] = opts[(opts.index(cur) + step) % len(opts)]
+            if conf[key] in opts:
+                conf[key] = opts[(opts.index(conf[key]) + step) % len(opts)]
+            else:
+                conf[key] = opts[0]          # hand-edited value: step back onto the enum
         elif key in TUI_NUMS:
             inc, lo, hi = TUI_NUMS[key]
             try:
@@ -1990,35 +2353,49 @@ def run_tui():
     raw[6][termios.VMIN], raw[6][termios.VTIME] = 1, 0
     tout.write("\033[?1049h\033[?25l")
     tout.flush()
-    saved = False
     try:
         termios.tcsetattr(fd, termios.TCSADRAIN, raw)
         while True:
-            draw()
-            key = read_key()
+            rows = build_rows()
+            cursor = resolve(rows, cur_id, prev_idx)
+            cur_id, prev_idx = row_id(rows[cursor]), cursor
+            avail_last = draw() or avail_last
+            key = wait_key()
+            if key is None:
+                continue                     # window resized — just redraw
             msg = ""
+            was_pending, pending = pending, ""
             kind, ref = rows[cursor]
+            dirty = state_conf() != saved_state
             if key in ("q", "\x03", "esc"):
-                break
+                if dirty and was_pending != "quit":
+                    pending, msg = "quit", "unsaved changes — press again to discard"
+                else:
+                    break
             elif key == "s":
                 write_conf_file(state_conf())
-                saved = True
-                break
+                saved_state, ever_saved = state_conf(), True
+                msg = "saved ✓ — " + CONF_PATH_PY
             elif key == "r":
-                conf = dict(DEFAULTS)
-                items1[:], items2[:] = mklist("SEGMENTS", CATALOG1), mklist("LINE2", CATALOG2)
-                msg = "reset to defaults"
+                if dirty and was_pending != "reset":
+                    pending, msg = "reset", "reset discards unsaved changes — press r again"
+                else:
+                    conf = dict(DEFAULTS)
+                    items1[:], items2[:] = mklist("SEGMENTS", CATALOG1), mklist("LINE2", CATALOG2)
+                    msg = "reset to defaults"
             elif key == "p":
                 names = list_presets()
                 if not names:
                     msg = "no presets yet — press P to save one"
+                elif dirty and was_pending not in ("preset",):
+                    pending, msg = "preset", "loading a preset discards unsaved changes — press p again"
                 else:
                     preset_idx = (preset_idx + 1) % len(names)
                     loaded = _load_conf_file(os.path.join(PRESET_DIR, names[preset_idx] + ".conf"))
                     conf = dict(DEFAULTS)
                     conf.update({k: v for k, v in loaded.items() if k in conf and v})
                     items1[:], items2[:] = mklist("SEGMENTS", CATALOG1), mklist("LINE2", CATALOG2)
-                    msg = "preset: " + names[preset_idx]
+                    pending, msg = "preset", "preset: " + names[preset_idx]
             elif key == "P":
                 # one-line name prompt in the footer; Enter saves, Esc cancels
                 name = ""
@@ -2041,15 +2418,22 @@ def run_tui():
             elif key == "\t":
                 # jump to the next section: options → line 1 → line 2 → options
                 starts = [0] + [i + 1 for i, r in enumerate(rows) if r[0] == "head"]
-                cursor = next((s for s in starts if s > cursor), starts[0])
+                cur_id = row_id(rows[next((s for s in starts if s > cursor), starts[0])])
             elif key in ("up", "k"):
-                cursor = (cursor - 1) % len(rows)
-                if rows[cursor][0] == "head":
-                    cursor = (cursor - 1) % len(rows)
+                cur_id = row_id(rows[move(rows, cursor, -1)])
             elif key in ("down", "j"):
-                cursor = (cursor + 1) % len(rows)
-                if rows[cursor][0] == "head":
-                    cursor = (cursor + 1) % len(rows)
+                cur_id = row_id(rows[move(rows, cursor, 1)])
+            elif key == "pgup":
+                i = max(0, cursor - avail_last)
+                cur_id = row_id(rows[i if rows[i][0] != "head" else move(rows, i, 1)])
+            elif key == "pgdn":
+                i = min(len(rows) - 1, cursor + avail_last)
+                cur_id = row_id(rows[i if rows[i][0] != "head" else move(rows, i, -1)])
+            elif key == "home":
+                cur_id = row_id(rows[0 if rows[0][0] != "head" else move(rows, 0, 1)])
+            elif key == "end":
+                i = len(rows) - 1
+                cur_id = row_id(rows[i if rows[i][0] != "head" else move(rows, i, -1)])
             elif key in ("left", "right") and kind == "opt":
                 cycle(ref, 1 if key == "right" else -1)
             elif key in ("+", "=") and kind == "opt":
@@ -2064,15 +2448,13 @@ def run_tui():
                 j = i - 1 if key == "K" else i + 1
                 if 0 <= j < len(lst):
                     lst[i], lst[j] = lst[j], lst[i]
-                    cursor += (-1 if key == "K" else 1)
-                    if rows[cursor][0] == "head":
-                        cursor += (-1 if key == "K" else 1)
+                    cur_id = ("seg", 0 if lst is items1 else 1, j)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         tout.write("\033[?1049l\033[?25h")
         tout.flush()
     print(("✓ wrote " + CONF_PATH_PY + "\n  Open a NEW Claude Code session to see it.")
-          if saved else "Nothing written.")
+          if ever_saved else "Nothing written.")
 
 # ---- entry ----------------------------------------------------------------------
 if MODE == "tui":
@@ -2091,11 +2473,12 @@ sample_json() {
 import json, os, sys, time
 now = time.time()
 print(json.dumps({
-    "session_name": "usage statusline v3",
+    "session_name": "usage statusline",
     "model": {"id": "claude-opus-5[1m]", "display_name": "Opus 5"},
     "effort": {"level": "high"},
     "cwd": sys.argv[1],
     "workspace": {"current_dir": sys.argv[1], "project_dir": sys.argv[1]},
+    "pr": {"number": 42, "review_state": "approved"},
     "context_window": {"used_percentage": 12, "context_window_size": 1000000},
     "cost": {"total_cost_usd": 2.10, "total_duration_ms": 4260000},
     "rate_limits": {"five_hour": {"used_percentage": 34, "resets_at": now + 2340},
@@ -2105,7 +2488,10 @@ EOF
 }
 
 render_preview() { # render_preview KEY=VAL ...
-  sample_json | env USAGE_MODE=preview "$@" python3 -c "$PY"
+  # Piped stdout hides the terminal size from Python, so measure it here; the -2
+  # leaves room for the gallery's two-space indent.
+  local _cols="${COLUMNS:-$(stty size < /dev/tty 2>/dev/null | awk '{print $2}')}"
+  sample_json | env USAGE_MODE=preview COLUMNS=$(( ${_cols:-102} - 2 )) "$@" python3 -c "$PY"
 }
 
 case "${1:-}" in
@@ -2118,7 +2504,7 @@ case "${1:-}" in
     if [ -n "${2:-}" ]; then
       render_preview CLAUDE_USAGE_THEME="$2" ${3:+CLAUDE_USAGE_PALETTE="$3"}
     else
-      for t in plain boxed dots mono badge soft rainbow powerline slant capsule frame; do
+      for t in $(USAGE_MODE=themes python3 -c "$PY" < /dev/null); do
         printf '%s:\n' "$t"; render_preview CLAUDE_USAGE_THEME="$t" | sed 's/^/  /'; echo
       done
     fi
@@ -2147,7 +2533,12 @@ case "${1:-}" in
           ''|*[!a-z0-9_-]*) echo "usage: $0 --preset <name>"; exit 1 ;;
         esac
         [ -f "$PRESET_DIR/$name.conf" ] || {
-          echo "no such preset '$name' — available:"; ls "$PRESET_DIR" 2>/dev/null | sed -n 's/\.conf$/  /p'
+          if [ -n "$(ls "$PRESET_DIR" 2>/dev/null)" ]; then
+            echo "no such preset '$name' — available:"
+            ls "$PRESET_DIR" | sed -n 's/\.conf$//p' | sed 's/^/  /'
+          else
+            echo "no presets saved yet — save one with: $0 --save-preset <name>"
+          fi
           exit 1
         }
         cp "$PRESET_DIR/$name.conf" "$CONF_PATH"
@@ -2163,7 +2554,7 @@ case "${1:-}" in
     shift
     while [ $# -gt 0 ]; do
       case "$1" in
-        --days) days="${2:-30}"; shift 2 ;;
+        --days) days="${2:-30}"; shift; [ $# -gt 0 ] && shift || true ;;
         --json) fmt=json; shift ;;
         --csv)  fmt=csv;  shift ;;
         --projects) proj=1; shift ;;
@@ -2178,14 +2569,20 @@ case "${1:-}" in
     echo "  (no arguments)         read the Claude Code statusline JSON on stdin and render"
     echo "  --configure            full-screen live editor (arrows, space, J/K, s to save)"
     echo "  --preview [theme] [palette]"
-    echo "                         draw a sample; themes: plain boxed dots mono badge"
-    echo "                         powerline slant capsule · palettes: default ocean sunset forest"
+    echo "                         draw a sample; themes: plain boxed frame dots prompt gutter"
+    echo "                         mono powerline slant capsule badge soft rainbow"
+    echo "                         palettes: default ocean sunset forest nord dracula gruvbox catppuccin"
     echo "  --doctor [--net]       check config, caches, token, git and glyphs"
-    echo "  --report [--days N] [--json|--csv]"
-    echo "                         per-day spend by model, tokens, searches, cache hit rate"
+    echo "  --report [--days N] [--json|--csv] [--projects]"
+    echo "                         per-day spend by model, tokens, searches, cache hit rate;"
+    echo "                         --projects splits the same window per project"
     echo "  --save-preset <name> / --preset <name> / --presets"
     echo "                         snapshot, activate or list named configurations"
+    echo "  --help                 this text"
     exit 0 ;;
+  --*|-*)
+    echo "unknown option: $1 (try --help)" >&2
+    exit 2 ;;
 esac
 
 input=$(cat)

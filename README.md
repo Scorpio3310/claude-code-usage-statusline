@@ -10,18 +10,18 @@ key, no external server, nothing leaves your machine.\*
 Quiet, because nothing needs your attention yet:
 
 ```
-⚡ Opus 5·1M high  7d 34%  ctx 12%  ⏱ 12m
+⚡ Opus 5·1M  high  7d 34%  ctx 12%  ⏱ 12m
 session $2.10 · today ≈$72.19 (Opus $38.66 · Fable $33.52) · month ≈$1,284
 ```
 
 Loud, because two windows will run out before they reset:
 
 ```
-⚡ Opus 5·1M high ⚡fast  ⚠ 5h ▉▉▉▉▉▉▉▉ 91%·39m  ⚠ 7d ▉▉▉▉▉▉▉░ 83%·2d  Fable 5 61%  ctx 12%  ⏱ 12m
+⚡ Opus 5·1M  ⚡fast  high  ⚠ 5h ▉▉▉▉▉▉▉▉ 91%·39m  ⚠ 7d ▉▉▉▉▉▉▉░ 83%·2d  Fable 5 61%  ctx 12%  ⏱ 12m
 session $2.10 · today ≈$72.19 · month ≈$1,284 · credits $12.40 of unlimited · ⚠ 5h limit in ~25m · ⚠ 7d limit in ~23h
 ```
 
-Four [themes](#themes), every segment optional, and a wizard that previews each choice
+Thirteen [themes](#themes), every segment optional, and a wizard that previews each choice
 with your real numbers before you commit to it:
 
 ```bash
@@ -41,9 +41,9 @@ bash install.sh      # copies the script to ~/.claude/, registers it, asks what 
 
 Then open a **new** Claude Code session. The installer backs up any existing
 `settings.json` and refuses to overwrite a different statusline you already use.
-It asks a handful of questions the first time and skips them if a config already
-exists; with no terminal attached (piped install, CI) it writes defaults instead of
-blocking.
+On first install it opens the full-screen configurator (quitting with `q` writes
+nothing — defaults apply); an existing config is kept as-is. With no terminal
+attached (piped install, CI) it writes defaults instead of blocking.
 
 <details>
 <summary>Manual install</summary>
@@ -66,29 +66,39 @@ Copy `statusline-usage.sh` to `~/.claude/statusline-usage.sh`, make it executabl
 
 ```bash
 bash ~/.claude/statusline-usage.sh --configure     # wizard, previews every choice
-bash ~/.claude/statusline-usage.sh --preview       # all four themes side by side
+bash ~/.claude/statusline-usage.sh --preview       # every theme, one block each
 ```
 
 `--configure` opens a **full-screen live editor** — no dependencies, no npm, just the
-script itself. Arrow keys move, `←`/`→` change a value, `space` toggles a segment,
-`K`/`J` move it up or down its line, `s` saves, `q` quits without writing, `r` resets
-to defaults. The preview at the bottom is rendered by the real renderer **with your
-real spend numbers** and updates on every keystroke, so you see exactly what each
-toggle does before you commit to it:
+script itself. Arrow keys move (`PgUp`/`PgDn`/`Home`/`End` jump, `Tab` hops between
+sections), `←`/`→` (or `+`/`-`) change a value, `space` toggles a segment, `K`/`J`
+move it up or down its line, `s` saves and stays (the header shows `· modified` until
+you do), `q` quits — asking once if you'd discard unsaved changes — and `r` resets to
+defaults. Rows only appear when they can matter, drawn as a tree (`├`/`└`) under the
+row that controls them: `FRAME`/`FRAME_TITLE` show up for the frame theme, `TINT` and
+the heat bar for sep themes, `NOTICE` for the adaptive style, and so on. The preview
+at the bottom is rendered by the real renderer **with your real spend numbers**, so
+you see exactly what each toggle does before you commit to it:
 
 ```
- Claude statusline — configurator   ↑↓ move · ←→ change · space toggle · K/J reorder · s save · q quit
+ Claude statusline — configurator · modified   ↑↓ move · ←→ change · space toggle · K/J reorder · p/P presets · s save · q quit
 ────────────────────────────────────────────────────────────────────────────────────────
-  Theme          ‹ boxed ›
-  Palette        ‹ ocean ›
-  ...
+ ▸ Theme           plain   boxed  [frame]  dots   prompt   gutter   mono   …
+   ├ Frame         [round]  sharp   double   heavy   dashed
+   ├ Frame color    dim  [zone]  model   model+zone   brand   …
+   └ Tint          [off]  ink   coal   graphite   slate   …
+   Palette         [default]  ocean   sunset   forest   nord   dracula   …
+ Line 1   space toggle · K/J move up/down
     [x] model
     [x] effort
     [ ] title
-────────────────────────────────────────────────────────────────────────────────────────
+── ↓ 14 more ───────────────────────────────────────────────────────────────────────────
+ frame theme only: border charset — round ╭─ · sharp ┌─ · double ╔═ · heavy ┏━ · dashed ╭╌
  preview — live, with your real spend numbers
- │ ⚡ Opus 5·1M │ high │ ⚠ 7d ▰▰▰▰▰▰▰▱ 83%·2d │ ctx 12% of 1M │ ⏱ 1h 11m │
- │ session $2.10 │ today ≈$227 (Opus $127 · Fable $99) │ month ≈$27,944 │
+ ╭──────────────────────────────────────────────────────────────────╮
+ │ ⚡ Opus 5·1M · high · ⚠ 7d ▰▰▰▰▰▰▰▱ 83%·2d · ctx 12% of 1M       │
+ │ session $2.10 · today ≈$227 (Opus $127 · Fable $99)              │
+ ╰──────────────────────────────────────────────────────────────────╯
 ```
 
 It writes `~/.claude/statusline-usage.conf`, which you can also edit by hand. Any key
@@ -97,21 +107,25 @@ can be overridden for a single session with the matching `CLAUDE_USAGE_<KEY>` en
 
 | Key | Default | What it does |
 |---|---|---|
-| `THEME` | `plain` | `plain` · `boxed` · `dots` · `mono` · `badge` · `soft` · `rainbow` · `powerline` · `slant` · `capsule` · `frame` — see below |
-| `PALETTE` | `default` | `default` · `ocean` · `sunset` · `forest` — recolors every theme; the green→amber→red meaning never changes |
+| `THEME` | `plain` | `plain` · `boxed` · `dots` · `prompt` · `gutter` · `mono` · `badge` · `soft` · `rainbow` · `powerline` · `slant` · `capsule` · `frame` — see below |
+| `FRAME` | `round` | `frame` theme only — border charset: `round` ╭─╮ · `sharp` ┌─┐ · `double` ╔═╗ · `heavy` ┏━┓ · `dashed` ╭╌╮ |
+| `FRAME_TITLE` | `off` | `frame` theme only — embeds a name in the top border, `╭─┤ name ├──╮`: `session` (the `/rename` name) or `dir` (repo/directory name) |
+| `FRAME_COLOR` | `dim` | Color of the frame borders and the `prompt` connectors: `dim` · `zone` (the worst meter's green/amber/red — a one-glance health ring) · `model` (the current model's color, like the model segment) · `model+zone` (model color while every meter is green, zone color once one heats up) · or a palette hue: `brand` `red` `amber` `green` `blue` `purple` `tan` `money` |
+| `PALETTE` | `default` | `default` · `ocean` · `sunset` · `forest` · `nord` · `dracula` · `gruvbox` · `catppuccin` — recolors every theme; the green→amber→red meaning never changes |
+| `TINT` | `off` | Background band behind the lines, sep themes only (plain/boxed/frame/dots/prompt/gutter): named tones `ink` `coal` `graphite` `slate` `navy` `ocean` `plum` `forest`, or any raw 0–255 index in the conf file. Frame borders and prompt/gutter prefixes stay on the default background |
 | `ICONS` | `unicode` | `unicode` = ⚡ ⑂ ⏱ symbols that render in any font · `nerd` = native Nerd Font glyphs · `none` = text only. Also switches the powerline arrows/caps (see below) |
 | `BAR` | `theme` | Meter bar style: `theme` (each theme's own) · `boxes` ▉░ · `slant` ▰▱ · `shade` █▒ · `line` ━╌ · `dots` ●○ · `mini` ▪▫ · `bars` ▮▯ · `ascii` #- · `dot` (a single colored ●) (`mono` always uses ascii) |
 | `BARW` | `8` | Meter bar length in cells, 4–16 |
-| `BAR_HEAT` | `0` | `1` colors bar cells by the zone they sit in — green below `NOTICE`, amber below `THRESHOLD`, red above — so the bar itself shows where the danger band starts. Sep themes only (plain/boxed/dots/frame); block themes color by background and ignore it. |
+| `BAR_HEAT` | `0` | `1` colors bar cells by the zone they sit in — green below `NOTICE`, amber below `THRESHOLD`, red above — so the bar itself shows where the danger band starts. Sep themes only (plain/boxed/dots/frame/prompt/gutter); block themes color by background and ignore it. |
 | `BUDGET_MONTH` / `BUDGET_DAY` | `0` | Your own $ targets. Non‑zero adds a `budget` meter — `budget ▉▉▉▉░░░░ 56%·4d $21,986 left` — with the same threshold colors, warnings and a runs‑out‑before‑reset projection as every other meter. This is the "don't cross the line at work" feature. |
 | `CMD` / `CMD_TTL` | — / `30` | A command whose first stdout line becomes the `cmd` segment (e.g. `kubectl config current-context`). Runs detached in the background, cached for `CMD_TTL` seconds — a render never waits on it, a failing command simply doesn't render. It's your own command from your own config file, executed with your own shell privileges — same trust as `.bashrc`. |
 | `RULE` | `0` | `1` draws a dim `─` rule as the last line — a visual boundary between this usage block and Claude Code's own footer below it |
 | `LINES` | `2` | `1` folds the money into the status line |
 | `STYLE` | `adaptive` | `adaptive` = show a meter only once it matters · `full` = always draw every bar · `compact` = numbers only |
-| `THRESHOLD` | `80` | At or above this a meter turns red, gets a bar and a `⚠` |
+| `THRESHOLD` | `80` | At or above this a meter turns red, gets a bar and a `⚠`. Between `NOTICE` and `THRESHOLD` it is amber, below `NOTICE` green — the same zone rule drives heat bars, the gutter bar and `FRAME_COLOR=zone` |
 | `NOTICE` | `50` | `adaptive` only: below this a meter is hidden |
-| `SEGMENTS` | `model,effort,5h,7d,quota,ctx,time` | Line 1 contents, in order. Also available: `title`, `git`, `dir`, `pr`, `vim`, `agent`, or a bucket by name (`fable`, `opus`, `sonnet`) |
-| `LINE2` | `session,today,models,month,credits,warn` | Line 2 contents, in order. Also available: `burn`, `spark`, `search`, `cache` |
+| `SEGMENTS` | `model,effort,5h,7d,quota,budget,ctx,time` | Line 1 contents, in order. Also available: `title`, `git`, `dir`, `pr`, `vim`, `agent`, `cmd`, or a bucket by name (`fable`, `opus`, `sonnet`) |
+| `LINE2` | `session,today,models,month,eom,credits,warn` | Line 2 contents, in order. Also available: `burn`, `spark`, `search`, `cache`, `proj` |
 | `GIT` | `branch` | `off` · `branch` (free) · `dirty` (also counts changed files) |
 | `REMOTE` | `0` | Fetch per‑model quotas and the usage‑credit balance (see below) |
 | `NOTIFY` | `off` | `off` · `threshold` (desktop notification on a crossing) · `all` (also when a limit is projected to run out) |
@@ -123,9 +137,11 @@ statusline-usage.sh --configure                    # full-screen live editor
 statusline-usage.sh --preview [theme] [palette]    # draw a sample line
 statusline-usage.sh --doctor [--net]               # why isn't something showing up?
 statusline-usage.sh --report [--days N] [--json|--csv]
+statusline-usage.sh --report --projects            # the same window, split per project
 statusline-usage.sh --save-preset work             # snapshot the current config
 statusline-usage.sh --preset work                  # activate a snapshot
 statusline-usage.sh --presets                      # list snapshots
+statusline-usage.sh --help                         # all of the above
 ```
 
 Presets are plain config files in `~/.claude/statusline-presets/` — switch between a
@@ -136,8 +152,9 @@ new name.
 `--doctor` checks the config (and the values actually in effect after env overrides),
 whether `statusLine` is registered and points here, transcript and cache state, whether
 an OAuth token can be found **and never prints it**, git detection, and finally draws
-every glyph the themes use so you can see which ones your font renders. It makes no
-network call unless you pass `--net`.
+every glyph the themes use so you can see which ones your font renders — plus, on a
+live terminal, a swatch line per palette. It makes no network call unless you pass
+`--net`.
 
 `--report` prints the spend history straight out of the cache — per day, per model, with
 tokens, searches and cache hit rate; `--report --projects` splits the same window per
@@ -154,12 +171,15 @@ month to date ≈$27,873 · last 7 days ≈$193/day · 5 active days in the last
 
 ## Themes
 
-Eight themes, all previewable with `--preview` and switchable live in the configurator:
+Thirteen themes, all previewable with `--preview` and switchable live in the configurator:
 
 ```
 plain      ⚡ Opus 5·1M high  ⚠ 7d ▉▉▉▉▉▉▉░ 83%·2d  ctx 12% of 1M  ⏱ 1h 11m
 boxed      │ ⚡ Opus 5·1M │ 7d 44% │ ⑂ main !3 │ 📁 statusline │ ctx 39% of 200k │
 dots       ⚡ Opus 5·1M · 7d 44% · ctx 12% of 1M · ⏱ 1h 11m
+prompt     ╭─ ⚡ Opus 5·1M · ⚠ 7d ▰▰▰▰▰▰▰▱ 83%·2d · ctx 12% of 1M
+           ╰─ session $2.10 · today ≈$127 · month ≈$28,088
+gutter     ▌ ⚡ Opus 5·1M · ⚠ 7d 83%·2d · ctx 12% of 1M   (▌ = worst meter's zone color)
 mono       Opus 5-1M | ! 7d #######- 83%-2d | ctx 12% of 1M | 1h 11m
 badge      colored blocks with inverse text — the boxed-screenshot look, in any font
 soft       one dark band, segments as colored text with ╱ separators — starship's
@@ -177,8 +197,16 @@ frame      ╭──────────────────────
            ╰──────────────────────────────────────────────╯
 ```
 
-`frame` draws a real rounded box around the whole block, stretched to the terminal
-width; its bottom border doubles as the `RULE` separator, so `RULE` is ignored there.
+`frame` draws a real box around the whole block, stretched to the terminal width;
+its bottom border doubles as the `RULE` separator, so `RULE` is ignored there. The
+border charset is the `FRAME` key (`round` ╭─╮ · `sharp` ┌─┐ · `double` ╔═╗ · `heavy`
+┏━┓ · `dashed` ╭╌╮), and `FRAME_TITLE` embeds the session or repo name in the top
+border: `╭─┤ statusline ├──╮`. `prompt` is the starship/powerlevel10k two-line
+connector (`╭─` / `╰─`, no right wall), and `gutter` prefixes every line with a `▌`
+bar colored by the worst meter's zone — a one-glance health light. `FRAME_COLOR`
+recolors the frame borders and prompt connectors (`zone` turns the whole frame into
+that health light), and `TINT` lays a dark background band under any sep theme's
+lines — the soft-theme look on top of plain, dots or a frame interior.
 
 **Nothing renders tofu by default.** Icons are their own axis (`ICONS`), and the default
 `unicode` set renders in any font — including the powerline family's separators, which
@@ -199,13 +227,15 @@ pointed powerline look, install a Nerd Font and set `ICONS=nerd`.
 
 So `capsule` without a Nerd Font gives you square-edged pills instead of boxes of tofu,
 and `ICONS=nerd` is the explicit opt-in once you've installed the font. Palettes are an
-independent axis: `PALETTE=ocean` recolors any theme (`mono` stays colorless and iconless
-whatever `ICONS` says).
+independent axis: `PALETTE=ocean` — or `nord`, `dracula`, `gruvbox`, `catppuccin`, all
+ported to 256-color so they work in any terminal — recolors any theme (`mono` stays
+colorless and iconless whatever `ICONS` says).
 
 `boxed` stretches to the terminal edge, because Claude Code passes `COLUMNS` to the
 statusline command. That also drives **width‑aware fitting**: when the line doesn't fit,
-segments are dropped least‑important‑first (`spark → title → dir → search → burn →
-time → pr → git → …`) and, in the last resort, the line is clipped with `…`. The model,
+segments are dropped least‑important‑first (`spark → title → dir → cmd → vim →
+agent → search → effort → proj → pr → cache → git → time → ctx → burn → …`) and, in
+the last resort, the line is clipped with `…`. The model,
 the meters and the warnings are never dropped — they're the reason the line exists.
 Nothing ever wraps onto a second row.
 
@@ -229,7 +259,7 @@ the line is never completely blind about your quota.
 
 | Segment | Source | Meaning |
 |---|---|---|
-| `color override debugging` | `session_name` | The session title you set with `/rename`. Truncated, and the first thing dropped on a narrow terminal. |
+| `refactor pricing` | `session_name` | The session title you set with `/rename`. Truncated, and among the first things dropped on a narrow terminal. |
 | `⚡ Opus 5·1M` | `model.id` | Current model, colored per family (Opus / Sonnet / Haiku / Fable), with version and a `·1M` tag when running with the 1M‑token context window. |
 | `high` | `effort.level` | Reasoning effort (`low`/`medium`/`high`/`xhigh`/`max`). Omitted when the model doesn't support it. |
 | `⚡fast` | `fast_mode` | Fast mode is on — worth noticing, it's **double** the per‑token price. |
@@ -239,6 +269,8 @@ the line is never completely blind about your quota.
 | `⑂ main !3 +1 ↑2↓1` | `.git/HEAD` + `git status` | Branch, changed files (`!`), staged files (`+`), and commits ahead/behind upstream (`↑↓`) — each part only when non‑zero. The branch is read straight from `.git/HEAD` — no subprocess, no cost. The counts need one `git status --porcelain -b`, so they refresh in the background keyed on the index mtime; `GIT=branch` skips them entirely. |
 | `vim NORMAL` | `vim.mode` | Vim editor mode — only present when vim mode is on. Amber outside INSERT. |
 | `code-architect` | `agent.name` | Agent name when Claude Code runs with `--agent`. |
+| `k8s-prod` | your `CMD` | First stdout line of your own command (`CMD=` in the conf) — runs detached, cached for `CMD_TTL` seconds, never blocks a render. |
+| `budget ▉▉▉▉░░░░ 56%·4d` | `BUDGET_MONTH`/`_DAY` | Your own $ target as a meter, with $ left and the same colors/warnings as every other meter. |
 | `📁 statusline` | `workspace.repo` / `project_dir` | Which project this window is in. |
 | `#42 ✓` | `pr.{number,review_state}` | Open PR for the branch, same data as Claude Code's own footer badge. |
 | `ctx 39% of 200k · compact in ~8k` | `context_window` | How much of the context window is used, how big it is, and — once you're close — how many tokens are left before Claude Code compacts the conversation (see below). |
@@ -276,8 +308,9 @@ If `eta` lands before the reset, you're on track to hit the wall and the warning
 appears. Nothing is drawn during the first 10 % of a window — right after a reset
 every burst looks like an emergency.
 
-Up to two warnings are shown, worst first: limit already reached → credits over
-threshold → auto‑compact approaching → soonest projected limit.
+Up to two warnings are shown, worst first: limit already reached → soonest projected
+limit → credits over threshold → projected over budget (`eom`) → auto‑compact
+approaching.
 
 ### Will the conversation be compacted?
 
@@ -307,14 +340,18 @@ projected to run out before it resets.
 ### About `today ≈$` and `month ≈$`
 
 Claude Code only gives the statusline the **current** session's cost. To show a real
-daily and monthly total, the script reads your local transcripts under
-`~/.claude/projects/*/*.jsonl` and reconstructs per‑message cost from token usage
-(input/output/cache × per‑model rates), grouped by local day and model family.
+daily and monthly total, the script reads every local transcript under
+`~/.claude/projects/` — including subagent and workflow transcripts, which on an
+agent‑heavy day are a double‑digit share of the bill — and reconstructs per‑message
+cost from token usage (input/output/cache × per‑model rates), grouped by local day
+and model family.
 
 Transcripts are append‑only, so the cache stores a **byte offset** per file and each
 render parses only what was appended since the last one. That matters: a long session's
-transcript reaches tens of megabytes, and re‑reading it on every render costs ~500 ms —
-the tail parse costs ~5 ms. The first run after an upgrade re‑reads everything once.
+transcript reaches tens of megabytes, and re‑reading everything on every render would
+cost seconds — the warm incremental pass costs a few milliseconds. The first run after
+an upgrade (or a timezone change, which invalidates the local‑day grouping) re‑reads
+everything once.
 
 Fast mode is priced correctly: messages carry `usage.speed`, and on the models that
 support it fast mode bills at **double** the standard rate ($10/$50 per Mtok on Opus 5
