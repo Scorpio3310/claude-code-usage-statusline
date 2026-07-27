@@ -1,9 +1,19 @@
 name: Publish to npm
 
+# Publishes via npm Trusted Publishing (OIDC) — no token, no secret. One-time
+# setup: on npmjs.com, package Settings → Trusted Publisher → GitHub Actions
+# with this repo and workflow filename. The very first version has to be
+# published manually (the publisher can only be configured on an existing
+# package); every tag after that ships from here, with provenance.
+
 on:
   push:
     tags:
       - "v*"
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -13,8 +23,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      - name: npm >= 11.5.1 (OIDC trusted publishing support)
+        run: npm install -g npm@latest && npm --version
 
       - name: Versions must agree (tag, package.json, script)
         run: |
@@ -29,5 +42,3 @@ jobs:
 
       - name: Publish
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
