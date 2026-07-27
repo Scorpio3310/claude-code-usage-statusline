@@ -80,26 +80,7 @@ the heat bar for sep themes, `NOTICE` for the adaptive style, and so on. The pre
 at the bottom is rendered by the real renderer **with your real spend numbers**, so
 you see exactly what each toggle does before you commit to it:
 
-```
- Claude statusline — configurator · modified   ↑↓ move · ←→ change · space toggle · K/J reorder · p/P presets · s save · q quit
-────────────────────────────────────────────────────────────────────────────────────────
- ▸ Theme           plain   boxed  [frame]  dots   prompt   gutter   mono   …
-   ├ Frame         [round]  sharp   double   heavy   dashed
-   ├ Frame color    dim  [zone]  model   model+zone   brand   …
-   └ Tint          [off]  ink   coal   graphite   slate   …
-   Palette         [default]  ocean   sunset   forest   nord   dracula   …
- Line 1   space toggle · K/J move up/down
-    [x] model
-    [x] effort
-    [ ] title
-── ↓ 14 more ───────────────────────────────────────────────────────────────────────────
- frame theme only: border charset — round ╭─ · sharp ┌─ · double ╔═ · heavy ┏━ · dashed ╭╌
- preview — live, with your real spend numbers
- ╭──────────────────────────────────────────────────────────────────╮
- │ ⚡ Opus 5·1M · high · ⚠ 7d ▰▰▰▰▰▰▰▱ 83%·2d · ctx 12% of 1M       │
- │ session $2.10 · today ≈$227 (Opus $127 · Fable $99)              │
- ╰──────────────────────────────────────────────────────────────────╯
-```
+![The live configurator](configurator.png)
 
 It writes `~/.claude/statusline-usage.conf`, which you can also edit by hand. Any key
 can be overridden for a single session with the matching `CLAUDE_USAGE_<KEY>` env var
@@ -172,6 +153,8 @@ month to date ≈$27,873 · last 7 days ≈$193/day · 5 active days in the last
 ## Themes
 
 Thirteen themes, all previewable with `--preview` and switchable live in the configurator:
+
+![All thirteen themes](themes.png)
 
 ```
 plain      ⚡ Opus 5·1M high  ⚠ 7d ▉▉▉▉▉▉▉░ 83%·2d  ctx 12% of 1M  ⏱ 1h 11m
@@ -458,7 +441,9 @@ ships a new model:
 | `statusline-usage.sh` | The statusline script (Bash wrapper around inline `python3`), plus `--configure`. |
 | `install.sh` | One‑command installer; runs the configuration picker. |
 | `README.md` | This file. |
-| `screenshot.png` | Demo screenshot used above. |
+| `screenshot.png` | Hero screenshot: the statusline in a live Claude Code session. |
+| `configurator.png` | The full-screen `--configure` editor. |
+| `themes.png` | `--preview` gallery of all thirteen themes. |
 | `LICENSE` | MIT license. |
 
 ## License
