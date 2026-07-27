@@ -515,7 +515,9 @@ def bar(p, n=None):
         return "●"
     on, off = T_BAR
     if T.get("mode") in ("joined", "pills"):
-        off = " "                             # on a colored block, hatching is noise
+        # On a colored block the bar is drawn in the dark inverse fg: hatched empties
+        # read as noise, but blank ones read as a stray tick — outline cells don't.
+        on, off = "▰", "▱"
     n = n or BARW
     f = max(0, min(n, int(round(p / 100.0 * n))))
     return on * f + off * (n - f)
