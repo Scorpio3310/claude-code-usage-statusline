@@ -130,6 +130,7 @@ can be overridden for a single session with the matching `CLAUDE_USAGE_<KEY>` en
 | `STYLE` | `adaptive` | `adaptive` = show a meter only once it matters · `full` = always draw every bar · `compact` = numbers only |
 | `THRESHOLD` | `80` | At or above this a meter turns red, gets a bar and a `⚠`. Between `NOTICE` and `THRESHOLD` it is amber, below `NOTICE` green — the same zone rule drives heat bars, the gutter bar and `FRAME_COLOR=zone` |
 | `NOTICE` | `50` | `adaptive` only: below this a meter is hidden |
+| `RESET` | `auto` | Reset display on the `5h`/`7d`/`quota`/`budget` meters: `auto` = countdown (`·39m`, `·2d`) on full bars only · `always` = countdown also on compact/numeric meters (`7d 63%·2d`) · `time` = the local clock of the reset instead of a countdown (`·14:00` within a day, `·Mon 09:00` within a week) · `off` = never shown |
 | `SEGMENTS` | `model,effort,5h,7d,quota,budget,ctx,time` | Line 1 contents, in order. Also available: `title`, `git`, `dir`, `pr`, `vim`, `agent`, `cmd`, or a bucket by name (`fable`, `opus`, `sonnet`) |
 | `LINE2` | `session,today,models,month,eom,credits,warn` | Line 2 contents, in order. Also available: `burn`, `spark`, `search`, `cache`, `proj` |
 | `GIT` | `branch` | `off` · `branch` (free) · `dirty` (also counts changed files) |
@@ -276,6 +277,9 @@ gets more ink the closer it is to hurting you:
 If nothing is above `NOTICE`, the highest meter is still shown as a bare number, so
 the line is never completely blind about your quota.
 
+The `·2d` reset suffix follows the `RESET` option: `auto` keeps it on full bars only
+(as above), `always`/`time` add it to the number-only form too, `off` removes it.
+
 ## What each part means
 
 **Line 1 — where you stand**
@@ -286,8 +290,8 @@ the line is never completely blind about your quota.
 | `⚡ Opus 5·1M` | `model.id` | Current model, colored per family (Opus / Sonnet / Haiku / Fable), with version and a `·1M` tag when running with the 1M‑token context window. |
 | `high` | `effort.level` | Reasoning effort (`low`/`medium`/`high`/`xhigh`/`max`). Omitted when the model doesn't support it. |
 | `⚡fast` | `fast_mode` | Fast mode is on — worth noticing, it's **double** the per‑token price. |
-| `5h … %·39m` | `rate_limits.five_hour` | Your **5‑hour** subscription usage and the countdown to reset. |
-| `7d … %·2d` | `rate_limits.seven_day` | Your **7‑day (weekly)** subscription usage and reset countdown. |
+| `5h … %·39m` | `rate_limits.five_hour` | Your **5‑hour** subscription usage and the countdown to reset (the `·39m` part follows the `RESET` option — countdown, wall‑clock time, or hidden). |
+| `7d … %·2d` | `rate_limits.seven_day` | Your **7‑day (weekly)** subscription usage and reset countdown (also governed by `RESET`). |
 | `Fable 5 … %·6d` | `/api/oauth/usage` | **Opt‑in.** Per‑model weekly windows. `quota` shows every bucket your account has (Fable 5, Opus, Sonnet…); naming one shows just that one. |
 | `⑂ main !3 +1 ↑2↓1` | `.git/HEAD` + `git status` | Branch, changed files (`!`), staged files (`+`), and commits ahead/behind upstream (`↑↓`) — each part only when non‑zero. The branch is read straight from `.git/HEAD` — no subprocess, no cost. The counts need one `git status --porcelain -b`, so they refresh in the background keyed on the index mtime; `GIT=branch` skips them entirely. |
 | `vim NORMAL` | `vim.mode` | Vim editor mode — only present when vim mode is on. Amber outside INSERT. |

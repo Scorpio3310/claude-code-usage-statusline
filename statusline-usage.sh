@@ -60,7 +60,7 @@ CONF_PATH_PY = os.environ.get("CLAUDE_USAGE_CONF") or os.path.join(HOME, "status
 
 DEFAULTS = {
     "THEME": "plain", "PALETTE": "default", "LINES": "2", "STYLE": "adaptive",
-    "THRESHOLD": "80", "NOTICE": "50",
+    "THRESHOLD": "80", "NOTICE": "50", "RESET": "auto",
     "SEGMENTS": "model,effort,5h,7d,quota,budget,ctx,time",
     "LINE2": "session,today,models,month,eom,credits,warn",
     "GIT": "branch", "REMOTE": "0", "NOTIFY": "off", "REMOTE_DEBUG": "0",
@@ -282,6 +282,10 @@ def apply_config(conf):
     STYLE = s("STYLE").lower()
     if STYLE not in ("adaptive", "full", "compact"):
         STYLE = "adaptive"
+    global RESET
+    RESET = s("RESET").lower()
+    if RESET not in ("auto", "always", "time", "off"):
+        RESET = "auto"
     LINES  = 1 if s("LINES") == "1" else 2
     GIT    = s("GIT").lower()
     TH     = num("THRESHOLD")
@@ -553,6 +557,20 @@ def countdown(ts):
     h = m // 60
     if h < 48:  return f"{h}h"
     return f"{h // 24}d"
+
+def clock(ts):
+    # The reset as a local wall-clock stamp: 14:00 within a day, Mon 09:00 within
+    # a week, Aug 2 beyond that.
+    try:
+        t = float(ts)
+        diff = t - time.time()
+    except Exception:
+        return ""
+    if diff <= 0: return "now"
+    lt = time.localtime(t)
+    if diff < 24 * HOUR:     return time.strftime("%H:%M", lt)
+    if diff < 7 * 24 * HOUR: return time.strftime("%a %H:%M", lt)
+    return time.strftime("%b ", lt) + str(lt.tm_mday)
 
 def money(v):
     return f"${v:,.2f}" if abs(v) < 100 else f"${v:,.0f}"
@@ -1071,13 +1089,22 @@ def meter_slots(meters):
         slots.setdefault(m["slot"], []).append(meter_seg(m, full))
     return slots
 
+def reset_str(m):
+    # RESET decides how a meter's reset is shown: countdown (·39m), local clock
+    # (·14:00 with RESET=time), or nothing (RESET=off).
+    if RESET == "off":
+        return ""
+    txt = clock(m.get("resets_at")) if RESET == "time" else countdown(m.get("resets_at"))
+    return f"·{txt}" if txt else ""
+
 def meter_seg(m, full):
     p, c = m["pct"], color_for(m["pct"])
     if not full:
-        return seg(m["key"], f"{m['label']} {p:.0f}%", c, prio="meter")
+        # Compact/numeric form stays reset-free unless the user opts in.
+        sfx = reset_str(m) if RESET in ("always", "time") else ""
+        return seg(m["key"], f"{m['label']} {p:.0f}%", c, sfx, prio="meter")
     warn = (IC["warn"] + " ") if p >= TH and IC["warn"] else ""
-    cd = countdown(m.get("resets_at"))
-    suffix = f"·{cd}" if cd else ""
+    suffix = reset_str(m)
     if m.get("note"):
         suffix += " " + m["note"]
     if BAR_HEAT:
@@ -1401,7 +1428,10 @@ def dollars_seg(remote):
     dl = (remote or {}).get("dollars")
     if not isinstance(dl, dict) or dl.get("remaining") is None:
         return None
-    return seg("credits", money(float(dl["remaining"])), C_MONEY, " left this week")
+    sfx = " left this week"
+    if RESET in ("always", "time"):
+        sfx += reset_str(dl)
+    return seg("credits", money(float(dl["remaining"])), C_MONEY, sfx)
 
 # ---- report -----------------------------------------------------------------
 def run_report():
@@ -1519,7 +1549,8 @@ def run_doctor():
     line(ok if os.path.exists(conf_path) else na, conf_path,
          "" if os.path.exists(conf_path) else "not created yet; defaults in use")
     print(f"   effective: THEME={THEME_NAME} PALETTE={PALETTE} LINES={LINES} STYLE={STYLE} "
-          f"THRESHOLD={TH:.0f} NOTICE={NOTICE:.0f} GIT={GIT} REMOTE={int(REMOTE)} NOTIFY={NOTIFY}")
+          f"THRESHOLD={TH:.0f} NOTICE={NOTICE:.0f} RESET={RESET} GIT={GIT} "
+          f"REMOTE={int(REMOTE)} NOTIFY={NOTIFY}")
     ec = effective_conf()
     tint_req = str(ec.get("TINT", "off")).strip().lower()
     print(f"   looks    : FRAME={str(ec.get('FRAME')).lower()} FRAME_TITLE={FRAME_TITLE} "
@@ -1542,7 +1573,8 @@ def run_doctor():
              "FRAME_TITLE": {"off", "session", "dir"},
              "FRAME_COLOR": {"dim", "zone", "model", "model+zone", "brand", "red",
                              "amber", "green", "blue", "purple", "tan", "money"},
-             "NOTIFY": {"off", "threshold", "all"}, "GIT": {"off", "branch", "dirty"}}
+             "NOTIFY": {"off", "threshold", "all"}, "GIT": {"off", "branch", "dirty"},
+             "RESET": {"auto", "always", "time", "off"}}
     for k, vals in valid.items():
         v = (raw.get(k) or "").strip().lower()
         if v and v not in vals:
@@ -2029,6 +2061,11 @@ THRESHOLD={THRESHOLD}
 # adaptive only: below NOTICE a meter is hidden. The highest one is always shown.
 NOTICE={NOTICE}
 
+# Reset display on the 5h/7d/quota/budget meters: auto = countdown (·39m) on full
+# bars only · always = also on compact/numeric meters · time = the local clock of
+# the reset (·14:00, ·Mon 09:00) instead of a countdown · off = never shown
+RESET={RESET}
+
 # Line 1 segments, in order: title, model, effort, git, dir, pr, vim, agent, cmd,
 # 5h, 7d, quota, budget, ctx, time
 # (quota = every per-model window the account has; or name one: fable, opus, sonnet)
@@ -2106,6 +2143,7 @@ TUI_ENUMS = {
                     "amber", "green", "blue", "purple", "tan", "money"],
     "TINT": ["off", "ink", "coal", "graphite", "slate", "navy", "ocean", "plum", "forest"],
     "LINES": ["2", "1"], "STYLE": ["adaptive", "full", "compact"],
+    "RESET": ["auto", "always", "time", "off"],
     "RULE": ["0", "1"],
     "GIT": ["branch", "dirty", "off"], "REMOTE": ["0", "1"],
     "NOTIFY": ["off", "threshold", "all"],
@@ -2132,6 +2170,7 @@ TUI_HELP = {
     "STYLE": "adaptive shows a meter only once it matters; full always draws bars",
     "THRESHOLD": "at this % a meter turns red, gets a bar and a warning",
     "NOTICE": "adaptive only: meters below this % stay hidden",
+    "RESET": "reset display on meters: auto = countdown on full bars · always = also on compact meters · time = local clock instead of countdown · off = hidden",
     "RULE": "adds a ─ rule as the last line — separates usage from Claude Code's own footer",
     "MARGIN": "columns shaved off the reported width — raise (2-4) if Claude Code clips the line with …",
     "GIT": "branch is read from .git/HEAD (free); dirty also counts changes in the background",
@@ -2182,7 +2221,7 @@ def run_tui():
 
     opt_keys = ["THEME", "FRAME", "FRAME_TITLE", "FRAME_COLOR", "TINT", "PALETTE",
                 "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE", "NOTICE",
-                "THRESHOLD", "RULE", "MARGIN", "BUDGET_MONTH", "BUDGET_DAY",
+                "THRESHOLD", "RESET", "RULE", "MARGIN", "BUDGET_MONTH", "BUDGET_DAY",
                 "GIT", "REMOTE", "NOTIFY", "UPDATE"]
     # Rows drawn as a tree under the row whose value decides their visibility.
     CHILD_OF = {"FRAME": "THEME", "FRAME_TITLE": "THEME", "FRAME_COLOR": "THEME",
@@ -2241,7 +2280,8 @@ def run_tui():
               "PALETTE": "Palette", "ICONS": "Icons",
               "BAR": "Bar", "BARW": "Bar width", "BAR_HEAT": "Heat bar",
               "LINES": "Lines", "STYLE": "Density", "THRESHOLD": "Threshold",
-              "NOTICE": "Notice", "RULE": "Rule line", "MARGIN": "Margin", "GIT": "Git",
+              "NOTICE": "Notice", "RESET": "Reset time",
+              "RULE": "Rule line", "MARGIN": "Margin", "GIT": "Git",
               "BUDGET_MONTH": "Budget $/mo", "BUDGET_DAY": "Budget $/day",
               "REMOTE": "Remote fetch", "NOTIFY": "Notify", "UPDATE": "Updates"}
     ENUM_NAMES = {"REMOTE": {"0": "off", "1": "on"}, "RULE": {"0": "off", "1": "on"},
