@@ -100,8 +100,9 @@ can be overridden for a single session with the matching `CLAUDE_USAGE_<KEY>` en
 | `THEME` | `plain` | `plain` · `boxed` · `dots` · `mono` · `badge` · `powerline` · `slant` · `capsule` — see below |
 | `PALETTE` | `default` | `default` · `ocean` · `sunset` · `forest` — recolors every theme; the green→amber→red meaning never changes |
 | `ICONS` | `unicode` | `unicode` = ⚡ ⑂ ⏱ symbols that render in any font · `nerd` = native Nerd Font glyphs · `none` = text only. Also switches the powerline arrows/caps (see below) |
-| `BAR` | `theme` | Meter bar style: `theme` (each theme's own) · `boxes` ▉░ · `slant` ▰▱ · `shade` █▒ · `line` ━╌ · `dots` ●○ · `mini` ▪▫ · `bars` ▮▯ · `ascii` #- (`mono` always uses ascii) |
+| `BAR` | `theme` | Meter bar style: `theme` (each theme's own) · `boxes` ▉░ · `slant` ▰▱ · `shade` █▒ · `line` ━╌ · `dots` ●○ · `mini` ▪▫ · `bars` ▮▯ · `ascii` #- · `dot` (a single colored ●) (`mono` always uses ascii) |
 | `BARW` | `8` | Meter bar length in cells, 4–16 |
+| `BAR_HEAT` | `0` | `1` colors bar cells by the zone they sit in — green below `NOTICE`, amber below `THRESHOLD`, red above — so the bar itself shows where the danger band starts. Sep themes only (plain/boxed/dots/frame); block themes color by background and ignore it. |
 | `BUDGET_MONTH` / `BUDGET_DAY` | `0` | Your own $ targets. Non‑zero adds a `budget` meter — `budget ▉▉▉▉░░░░ 56%·4d $21,986 left` — with the same threshold colors, warnings and a runs‑out‑before‑reset projection as every other meter. This is the "don't cross the line at work" feature. |
 | `CMD` / `CMD_TTL` | — / `30` | A command whose first stdout line becomes the `cmd` segment (e.g. `kubectl config current-context`). Runs detached in the background, cached for `CMD_TTL` seconds — a render never waits on it, a failing command simply doesn't render. It's your own command from your own config file, executed with your own shell privileges — same trust as `.bashrc`. |
 | `RULE` | `0` | `1` draws a dim `─` rule as the last line — a visual boundary between this usage block and Claude Code's own footer below it |
@@ -139,8 +140,9 @@ every glyph the themes use so you can see which ones your font renders. It makes
 network call unless you pass `--net`.
 
 `--report` prints the spend history straight out of the cache — per day, per model, with
-tokens, searches and cache hit rate. `--json` and `--csv` are there for when someone asks
-for a monthly number:
+tokens, searches and cache hit rate; `--report --projects` splits the same window per
+project instead. `--json` and `--csv` are there for when someone asks for a monthly
+number:
 
 ```
 day           Fable    Opus    total  searches  cache_pct      tokens
@@ -163,7 +165,15 @@ badge      colored blocks with inverse text — the boxed-screenshot look, in an
 powerline  arrow-joined blocks              — needs a Nerd Font
 slant      the same train, slanted edges  — needs a Nerd Font
 capsule    each segment its own pill  …    — needs a Nerd Font
+
+frame      ╭──────────────────────────────────────────────╮
+           │ ⚡ Opus 5·1M · ⚠ 7d ▰▰▰▰▰▰▰▱ 83%·2d · ctx 12% │
+           │ session $2.10 · today ≈$127 · month ≈$28,088 │
+           ╰──────────────────────────────────────────────╯
 ```
+
+`frame` draws a real rounded box around the whole block, stretched to the terminal
+width; its bottom border doubles as the `RULE` separator, so `RULE` is ignored there.
 
 **Nothing renders tofu by default.** Icons are their own axis (`ICONS`), and the default
 `unicode` set renders in any font — including the powerline family's separators, which
@@ -231,6 +241,8 @@ the line is never completely blind about your quota.
 | `(Opus $38.66 · Fable $33.52)` | local transcripts | Today split by model family — Fable costs 2× Opus per token, so the split is usually the interesting part. |
 | `month ≈$1,284` | local transcripts | Month to date, same reconstruction. |
 | `≈$88/h` | local transcripts | Burn rate from hourly buckets: the current hour extrapolated once it has ten minutes of signal, otherwise the last complete one. |
+| `eom ≈$32,750` | computed | Straight-line month-end forecast from the pace so far (hidden in the first two days of a month). Red — plus a `projected over budget` warning — when it beats `BUDGET_MONTH`, which tells you you're heading over **before** it happens. |
+| `top …usage-statusline $336` | local transcripts | The most expensive project today — transcripts already live in per-project folders, so this costs nothing extra. `--report --projects` gives the full table. |
 | `█▃▁▁▁▂▂` | local transcripts | Last seven days of spend, oldest first — one glance tells you whether today is normal. |
 | `🔍 250` | `usage.server_tool_use` | Web searches today. They're billed per request (~$10/1k) **on top of tokens**, and are included in the totals above. |
 | `cache 94%` | local transcripts | Share of input tokens served from the prompt cache. High is good, so the colors are inverted — a low number means you're paying full price for context that could have been cached. |

@@ -47,10 +47,11 @@ DEFAULTS = {
     "THEME": "plain", "PALETTE": "default", "LINES": "2", "STYLE": "adaptive",
     "THRESHOLD": "80", "NOTICE": "50",
     "SEGMENTS": "model,effort,5h,7d,quota,budget,ctx,time",
-    "LINE2": "session,today,models,month,credits,warn",
+    "LINE2": "session,today,models,month,eom,credits,warn",
     "GIT": "branch", "REMOTE": "0", "NOTIFY": "off", "REMOTE_DEBUG": "0",
     "ICONS": "unicode", "RULE": "0", "BAR": "theme", "BARW": "8",
     "BUDGET_MONTH": "0", "BUDGET_DAY": "0", "CMD": "", "CMD_TTL": "30",
+    "BAR_HEAT": "0",
 }
 ENV_ALIASES = {"REMOTE": ("FABLE",), "REMOTE_DEBUG": ("FABLE_DEBUG",)}
 
@@ -91,6 +92,9 @@ THEMES = {
                   "bar": ("▉", "░"), "icons": "unicode", "color": True,  "pad": False},
     "boxed":     {"mode": "sep", "sep": " │ ", "open": "│ ", "close": " │",
                   "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": True},
+    "frame":     {"mode": "sep", "sep": " · ", "open": "│ ", "close": " │",
+                  "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": True,
+                  "frame": True},
     "dots":      {"mode": "sep", "sep": " · ", "open": "",   "close": "",
                   "bar": ("▰", "▱"), "icons": "unicode", "color": True,  "pad": False},
     "mono":      {"mode": "sep", "sep": " | ", "open": "",   "close": "",
@@ -132,7 +136,7 @@ PALETTES = {
 # Meter bar styles — an axis of their own; "theme" keeps each theme's native pair.
 BARS = {"boxes": ("▉", "░"), "slant": ("▰", "▱"), "shade": ("█", "▒"),
         "line": ("━", "╌"), "dots": ("●", "○"), "mini": ("▪", "▫"),
-        "bars": ("▮", "▯"), "ascii": ("#", "-")}
+        "bars": ("▮", "▯"), "ascii": ("#", "-"), "dot": None}   # dot = one ● only
 
 def apply_config(conf):
     """Derive every renderer setting from a flat dict of strings."""
@@ -185,8 +189,11 @@ def apply_config(conf):
         BARW = max(4, min(16, int(float(s("BARW")))))
     except ValueError:
         BARW = 8
-    global BUDGET_MONTH, BUDGET_DAY, CMD, CMD_TTL
+    global BUDGET_MONTH, BUDGET_DAY, CMD, CMD_TTL, BAR_HEAT
     BUDGET_MONTH, BUDGET_DAY = num("BUDGET_MONTH"), num("BUDGET_DAY")
+    # Heat needs embedded fg codes inside the segment text, which only sep-mode
+    # colored themes render verbatim (blocks themes color by background; mono has none).
+    BAR_HEAT = flag("BAR_HEAT") and T.get("mode", "sep") == "sep" and T["color"]
     CMD = conf.get("CMD", "") or ""
     CMD_TTL = max(5, num("CMD_TTL") or 30)
     STYLE = s("STYLE").lower()
@@ -218,8 +225,8 @@ except ValueError:
 
 # Priority decides what gets dropped first when the line is wider than the terminal.
 # >= 90 is never dropped: the model, the meters and the warnings are the whole point.
-PRIO = {"spark": 10, "title": 12, "dir": 15, "cmd": 16, "vim": 17, "agent": 18, "search": 20, "effort": 22, "pr": 25,
-        "cache": 28, "git": 30, "time": 35, "burn": 45, "ctx": 40, "month": 50,
+PRIO = {"spark": 10, "title": 12, "dir": 15, "cmd": 16, "vim": 17, "agent": 18, "search": 20, "effort": 22, "proj": 24, "pr": 25,
+        "cache": 28, "git": 30, "time": 35, "burn": 45, "ctx": 40, "eom": 48, "month": 50,
         "session": 60, "credits": 65, "today": 80, "model": 95, "meter": 92,
         "warn": 99, "hint": 99}
 
@@ -341,10 +348,30 @@ def color_for(p):
     return C_GREEN
 
 def bar(p, n=None):
+    if T_BAR is None:                         # dot style: a single status dot
+        return "●"
     on, off = T_BAR
     n = n or BARW
     f = max(0, min(n, int(round(p / 100.0 * n))))
     return on * f + off * (n - f)
+
+def heat_bar(p, n=None):
+    # Cells colored by the zone they sit in, so the bar itself shows where the
+    # danger band starts: green below NOTICE, amber below THRESHOLD, red above.
+    if T_BAR is None:
+        return None
+    on, off = T_BAR
+    n = n or BARW
+    f = max(0, min(n, int(round(p / 100.0 * n))))
+    out = []
+    for i in range(n):
+        if i < f:
+            frac = (i + 1) / n * 100
+            col = C_GREEN if frac <= NOTICE else (C_AMBER if frac <= TH else C_RED)
+            out.append(f"\033[38;5;{col}m{on}")
+        else:
+            out.append(f"\033[38;5;{C_DIM}m{off}")
+    return "".join(out) + "\033[0m"
 
 def dur(seconds):
     s = int(max(0, seconds))
@@ -850,6 +877,15 @@ def meter_seg(m, full):
     suffix = f"·{cd}" if cd else ""
     if m.get("note"):
         suffix += " " + m["note"]
+    if BAR_HEAT:
+        hb = heat_bar(min(p, 100))
+        if hb is not None:
+            # Colors live inside the text, so the segment itself stays uncolored;
+            # label and percentage keep the level color.
+            lvl = f"\033[38;5;{c}m"
+            return seg(m["key"],
+                       f"{lvl}{warn}{m['label']}\033[0m {hb} {lvl}{p:.0f}%\033[0m",
+                       None, suffix, prio="meter")
     return seg(m["key"], f"{warn}{m['label']} {bar(min(p, 100))} {p:.0f}%", c,
                suffix, prio="meter")
 
@@ -885,7 +921,7 @@ def eta_to_limit(m, now):
     eta = elapsed * (100.0 - p) / p
     return eta if eta < remaining else None
 
-def build_warnings(meters, remote, now, d):
+def build_warnings(meters, remote, now, d, eom_over=None):
     out = []
     credits = (remote or {}).get("credits") or {}
     burning = bool(credits.get("enabled")) and (credits.get("used") or 0) > 0
@@ -899,6 +935,8 @@ def build_warnings(meters, remote, now, d):
                 out.append(f"usage credits {float(util):.0f}% of {money(float(credits['limit']))}")
         except (TypeError, ValueError):
             pass
+    if eom_over is not None:
+        out.append(f"projected over budget (eom ≈{money(eom_over)})")
     left = compact_left(d)
     if left is not None and left <= COMPACT_BAND:
         out.append("auto-compact now" if left <= 0 else f"auto-compact in ~{tokens(left)} tokens")
@@ -1016,8 +1054,9 @@ def file_costs(path, start=0, prev=None):
 
 def spend_all():
     # Merged view over every transcript: per-day cost by model family, per-day tokens,
-    # per-day searches and hourly buckets for the burn rate.
-    out = {"days": {}, "hours": {}, "searches": {}, "toks": {}}
+    # per-day searches, hourly buckets for the burn rate, and per-project totals
+    # (the project is simply the transcript's parent directory — no cache change).
+    out = {"days": {}, "hours": {}, "searches": {}, "toks": {}, "projects": {}}
     files = glob.glob(os.path.join(HOME, "projects", "*", "*.jsonl"))
     if not files:
         return out
@@ -1046,11 +1085,17 @@ def spend_all():
             dirty = True
         new_entries[path] = {"mtime": st.st_mtime, "size": st.st_size, "offset": consumed,
                              "days": days, "hours": hours, "searches": searches, "toks": toks}
+        proj = os.path.basename(os.path.dirname(path))
         for day, fams in (days or {}).items():
             if isinstance(fams, dict):
                 agg = out["days"].setdefault(day, {})
+                total = 0.0
                 for fam, c in fams.items():
                     agg[fam] = agg.get(fam, 0.0) + c
+                    total += c
+                if total:
+                    p_agg = out["projects"].setdefault(proj, {})
+                    p_agg[day] = p_agg.get(day, 0.0) + total
         for hour, c in (hours or {}).items():
             out["hours"][hour] = out["hours"].get(hour, 0.0) + c
         for day, n in (searches or {}).items():
@@ -1063,6 +1108,26 @@ def spend_all():
     if dirty or len(new_entries) != len(entries):
         _write_json(cache_path, {"version": 4, "files": new_entries})
     return out
+
+def project_label(slug, all_slugs):
+    # Slugs are munged cwds ("-Users-nik-Sites-my-repo"); strip the prefix shared by
+    # every project (typically the home dir) and keep the tail readable.
+    slugs = list(all_slugs)
+    if len(slugs) > 1:
+        common = os.path.commonprefix(slugs)
+        cut = common.rfind("-") + 1           # cut at a separator, not mid-word
+        if cut > 0 and len(slug) > cut:
+            slug = slug[cut:]
+    return slug if len(slug) <= 24 else "…" + slug[-23:]
+
+def eom_projection(month_total, now_local):
+    # Straight-line month-end forecast; meaningless in the first days of a month.
+    if now_local.day < 3 or month_total <= 0:
+        return None
+    m_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    m_next = (m_start + timedelta(days=32)).replace(day=1)
+    frac = (now_local - m_start).total_seconds() / (m_next - m_start).total_seconds()
+    return month_total / frac if frac > 0 else None
 
 def cache_hit_rate(toks_day):
     # Share of input tokens served from the prompt cache. High is good: a low number
@@ -1123,6 +1188,37 @@ def run_report():
     days = int(os.environ.get("REPORT_DAYS") or 30)
     fmt = (os.environ.get("REPORT_FORMAT") or "text").lower()
     data = spend_all()
+    now_local = datetime.now().astimezone()
+    if os.environ.get("REPORT_PROJECTS"):
+        today_k = now_local.strftime("%Y-%m-%d")
+        keys = {(now_local - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)}
+        rows = []
+        for slug, per_day in data["projects"].items():
+            in_range = sum(v for day, v in per_day.items() if day in keys)
+            if in_range <= 0:
+                continue
+            rows.append({"project": project_label(slug, data["projects"].keys()),
+                         "today": round(per_day.get(today_k, 0.0), 2),
+                         "range": round(in_range, 2),
+                         "all_time": round(sum(per_day.values()), 2)})
+        rows.sort(key=lambda r: -r["range"])
+        if fmt == "json":
+            print(json.dumps({"days_window": days, "projects": rows}, indent=2)); return
+        cols = ["project", "today", "range", "all_time"]
+        heads = {"range": f"last_{days}d"}
+        if fmt == "csv":
+            print(",".join(heads.get(c, c) for c in cols))
+            for r in rows:
+                print(",".join(str(r[c]) for c in cols))
+            return
+        w = {c: max(len(heads.get(c, c)), *(len(str(r[c])) for r in rows)) if rows
+             else len(heads.get(c, c)) for c in cols}
+        print("  ".join(heads.get(c, c).ljust(w[c]) if c == "project"
+                        else heads.get(c, c).rjust(w[c]) for c in cols))
+        for r in rows:
+            print("  ".join(str(r[c]).ljust(w[c]) if c == "project"
+                            else str(r[c]).rjust(w[c]) for c in cols))
+        return
     now = datetime.now().astimezone()
     keys = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
     fams = sorted({f for day in keys for f in data["days"].get(day, {})
@@ -1165,8 +1261,12 @@ def run_report():
         last7 = [sum(data["days"].get((now - timedelta(days=i)).strftime("%Y-%m-%d"), {}).values())
                  for i in range(7)]
         print()
-        print(f"month to date ≈{money(mtd)} · last 7 days ≈{money(sum(last7) / 7)}/day "
-              f"· {len(rows)} active days in the last {days}")
+        tail = (f"month to date ≈{money(mtd)} · last 7 days ≈{money(sum(last7) / 7)}/day "
+                f"· {len(rows)} active days in the last {days}")
+        proj_val = eom_projection(mtd, now_local)
+        if proj_val is not None:
+            tail += f" · projected month end ≈{money(proj_val)}"
+        print(tail)
 
 # ---- doctor -----------------------------------------------------------------
 def run_doctor():
@@ -1449,6 +1549,19 @@ def render_status(d):
             line2.append(seg("today", f"today ≈{money(today_total)}", C_MONEY, suffix))
         elif key == "month" and month_total > 0:
             line2.append(seg("month", f"month ≈{money(month_total)}", C_MONEY))
+        elif key == "eom":
+            proj_val = eom_projection(month_total, _now)
+            if proj_val is not None:
+                over = BUDGET_MONTH > 0 and proj_val > BUDGET_MONTH
+                line2.append(seg("eom", f"eom ≈{money(proj_val)}",
+                                 C_RED if over else C_DIM))
+        elif key == "proj" and spend["projects"]:
+            by_today = sorted(((p, d.get(TODAY, 0.0)) for p, d in spend["projects"].items()),
+                              key=lambda kv: -kv[1])
+            if by_today and by_today[0][1] > 0:
+                name = project_label(by_today[0][0], spend["projects"].keys())
+                line2.append(seg("proj", f"top {name}", C_DIM,
+                                 " " + money(by_today[0][1])))
         elif key == "spark":
             s = sparkline(per_day)
             if s:
@@ -1471,7 +1584,9 @@ def render_status(d):
                 if s:
                     line2.append(s)
         elif key == "warn":
-            for w in build_warnings(meters, remote, now, d):
+            _eov = eom_projection(month_total, _now)
+            eom_over = _eov if (BUDGET_MONTH > 0 and _eov and _eov > BUDGET_MONTH) else None
+            for w in build_warnings(meters, remote, now, d, eom_over):
                 line2.append(seg("warn", (IC["warn"] + " " if IC["warn"] else "") + w, C_RED))
 
     if LINES == 1:
@@ -1479,7 +1594,13 @@ def render_status(d):
     else:
         out = [render_line(fit(line1)), render_line(fit(line2))]
     out = [clip(l) for l in out if l.strip()]
-    if RULE and out:
+    if T.get("frame") and out:
+        # A real box: rounded corners, top and bottom borders. Claude Code trims
+        # each line, but the borders aren't whitespace, so they survive.
+        w = WIDTH or (max(vlen(l) for l in out) if out else 80)
+        out = [paint("╭" + "─" * max(0, w - 2) + "╮", C_DIM)] + out + \
+              [paint("╰" + "─" * max(0, w - 2) + "╯", C_DIM)]
+    elif RULE and out:
         # A quiet horizontal rule as the last line: the visual boundary between this
         # usage block and Claude Code's own footer below it.
         ch = "-" if THEME_NAME == "mono" else "─"
@@ -1511,9 +1632,11 @@ ICONS={ICONS}
 RULE={RULE}
 
 # Meter bar style: theme (each theme's own) · boxes ▉░ · slant ▰▱ · shade █▒
-# · line ━╌ · dots ●○ · mini ▪▫ · bars ▮▯ · ascii #-      and width in cells (4-16)
+# · line ━╌ · dots ●○ · mini ▪▫ · bars ▮▯ · ascii #- · dot (a single ●)
+# BARW = width in cells (4-16). BAR_HEAT=1 colors cells by zone (sep themes only).
 BAR={BAR}
 BARW={BARW}
+BAR_HEAT={BAR_HEAT}
 
 # Your own $ targets (0 = off). With the "budget" segment enabled this draws a meter
 # with $ left, threshold warnings and a runs-out-before-reset projection.
@@ -1592,12 +1715,13 @@ def _sample_payload():
 
 CATALOG1 = ["title", "model", "effort", "git", "dir", "pr", "vim", "agent", "cmd",
             "5h", "7d", "quota", "budget", "ctx", "time"]
-CATALOG2 = ["session", "today", "models", "month", "burn", "spark", "cache", "search",
-            "credits", "warn"]
+CATALOG2 = ["session", "today", "models", "month", "eom", "proj", "burn", "spark",
+            "cache", "search", "credits", "warn"]
 TUI_ENUMS = {
     "THEME": list(THEMES.keys()), "PALETTE": list(PALETTES.keys()),
     "ICONS": ["unicode", "nerd", "none"],
-    "BAR": ["theme", "boxes", "slant", "shade", "line", "dots", "mini", "bars", "ascii"],
+    "BAR": ["theme", "boxes", "slant", "shade", "line", "dots", "mini", "bars", "ascii", "dot"],
+    "BAR_HEAT": ["0", "1"],
     "LINES": ["2", "1"], "STYLE": ["adaptive", "full", "compact"],
     "RULE": ["0", "1"],
     "GIT": ["branch", "dirty", "off"], "REMOTE": ["0", "1"],
@@ -1609,6 +1733,9 @@ TUI_HELP = {
     "ICONS": "unicode = ⚡ ⑂ ⏱ everywhere · nerd = Nerd Font glyphs (needs the font!) · none = text only",
     "BAR": "meter bar style: theme keeps each theme's own · ▉░ ▰▱ █▒ ━╌ ●○ ▪▫ ▮▯ #-",
     "BARW": "meter bar length in cells (4-16)",
+    "BAR_HEAT": "color bar cells by zone (green/amber/red) — sep themes only (plain/boxed/dots/frame)",
+    "eom": "straight-line month-end forecast; red + warning when it beats your monthly budget",
+    "proj": "the most expensive project today (from transcript folders)",
     "BUDGET_MONTH": "monthly $ target: adds a budget meter with $ left, warnings and a runs-out projection (0 = off)",
     "BUDGET_DAY": "daily $ target, same meter per day (0 = off)",
     "budget": "your own $ target as a meter (set Budget $/mo or $/day)",
@@ -1662,7 +1789,7 @@ def run_tui():
         return items
     items1, items2 = mklist("SEGMENTS", CATALOG1), mklist("LINE2", CATALOG2)
 
-    opt_keys = ["THEME", "PALETTE", "ICONS", "BAR", "BARW", "LINES", "STYLE",
+    opt_keys = ["THEME", "PALETTE", "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE",
                 "THRESHOLD", "NOTICE", "RULE", "BUDGET_MONTH", "BUDGET_DAY",
                 "GIT", "REMOTE", "NOTIFY"]
     rows = [("opt", k) for k in opt_keys]
@@ -1672,12 +1799,13 @@ def run_tui():
     rows += [("seg", (items2, i)) for i in range(len(items2))]
 
     LABELS = {"THEME": "Theme", "PALETTE": "Palette", "ICONS": "Icons",
-              "BAR": "Bar", "BARW": "Bar width",
+              "BAR": "Bar", "BARW": "Bar width", "BAR_HEAT": "Heat bar",
               "LINES": "Lines", "STYLE": "Density", "THRESHOLD": "Threshold",
               "NOTICE": "Notice", "RULE": "Rule line", "GIT": "Git",
               "BUDGET_MONTH": "Budget $/mo", "BUDGET_DAY": "Budget $/day",
               "REMOTE": "Remote fetch", "NOTIFY": "Notify"}
-    ENUM_NAMES = {"REMOTE": {"0": "off", "1": "on"}, "RULE": {"0": "off", "1": "on"}}
+    ENUM_NAMES = {"REMOTE": {"0": "off", "1": "on"}, "RULE": {"0": "off", "1": "on"},
+                  "BAR_HEAT": {"0": "off", "1": "on"}}
 
     def state_conf():
         c = dict(conf)
@@ -1983,10 +2111,12 @@ case "${1:-}" in
         --days) days="${2:-30}"; shift 2 ;;
         --json) fmt=json; shift ;;
         --csv)  fmt=csv;  shift ;;
+        --projects) proj=1; shift ;;
         *) shift ;;
       esac
     done
-    USAGE_MODE=report REPORT_DAYS="$days" REPORT_FORMAT="$fmt" python3 -c "$PY" < /dev/null
+    USAGE_MODE=report REPORT_DAYS="$days" REPORT_FORMAT="$fmt" REPORT_PROJECTS="${proj:-}" \
+      python3 -c "$PY" < /dev/null
     exit 0 ;;
   --help|-h)
     echo "usage: statusline-usage.sh [command]"
