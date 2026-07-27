@@ -1,23 +1,40 @@
 #!/usr/bin/env bash
 # One-command installer for the Claude Code usage statusline.
-# Run this on any machine that has Claude Code:  bash install.sh
+#   npx claude-usage-statusline            install (first run opens the configurator)
+#   npx claude-usage-statusline --update   update the installed script, keep the config
+#   bash install.sh                        same, from a clone
 set -euo pipefail
-
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$HERE/statusline-usage.sh"
-DEST_DIR="$HOME/.claude"
-DEST="$DEST_DIR/statusline-usage.sh"
-SETTINGS="$DEST_DIR/settings.json"
 
 command -v python3 >/dev/null 2>&1 || {
   echo "❌ python3 is required (the statusline script uses it to parse/format). Install it and re-run."
   exit 1
 }
 
+# npx runs this through a node_modules/.bin symlink — resolve to the real package dir.
+SELF="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
+SRC="$HERE/statusline-usage.sh"
+DEST_DIR="$HOME/.claude"
+DEST="$DEST_DIR/statusline-usage.sh"
+SETTINGS="$DEST_DIR/settings.json"
+
+ver() { sed -n 's/^export STATUSLINE_VERSION="\(.*\)"/\1/p' "$1" 2>/dev/null | head -1; }
+NEW_VER="$(ver "$SRC")"
+
+if [ "${1:-}" = "--update" ]; then
+  OLD_VER="$(ver "$DEST")"
+  mkdir -p "$DEST_DIR"
+  cp "$SRC" "$DEST"
+  chmod +x "$DEST"
+  echo "✓ updated $DEST (v${OLD_VER:-?} → v${NEW_VER:-?})"
+  echo "  Config and settings untouched. Open a NEW Claude Code session to pick it up."
+  exit 0
+fi
+
 mkdir -p "$DEST_DIR"
 cp "$SRC" "$DEST"
 chmod +x "$DEST"
-echo "✓ installed script → $DEST"
+echo "✓ installed script v${NEW_VER:-?} → $DEST"
 
 python3 - "$SETTINGS" "$DEST" <<'PY'
 import json, os, shutil, sys

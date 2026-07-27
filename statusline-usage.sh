@@ -16,6 +16,7 @@
 # five_hour and seven_day in the payload, so those come from the endpoint /usage reads.
 # That fetch (and the git dirty count) run detached in the background — a render never
 # blocks — read your existing OAuth token, never refresh it, and fail silently.
+# The only other network touch is a daily new-version check (UPDATE=off disables it).
 #
 # Configure with:  bash statusline-usage.sh --configure     (full-screen live editor)
 # Preview themes:  bash statusline-usage.sh --preview [theme] [palette]
@@ -29,6 +30,10 @@ command -v python3 >/dev/null 2>&1 || {
   exit 0   # exit clean so Claude Code doesn't surface an error for a missing statusline
 }
 
+# Single source of truth for the version; the GitHub release workflow checks it
+# against package.json and the git tag. Exported so the Python side can read it.
+export STATUSLINE_VERSION="1.0.0"
+
 CONF_PATH="${CLAUDE_USAGE_CONF:-$HOME/.claude/statusline-usage.conf}"
 
 PY=$(cat <<'PYEOF'
@@ -37,6 +42,7 @@ from datetime import datetime, timezone, timedelta
 
 HOME = os.path.expanduser("~/.claude")
 _MODE = os.environ.get("USAGE_MODE", "render")
+VERSION = os.environ.get("STATUSLINE_VERSION", "0")   # exported by the bash head
 
 if _MODE in ("render", "preview"):
     try:
@@ -61,7 +67,7 @@ DEFAULTS = {
     "ICONS": "unicode", "RULE": "0", "BAR": "theme", "BARW": "8",
     "BUDGET_MONTH": "0", "BUDGET_DAY": "0", "CMD": "", "CMD_TTL": "30",
     "BAR_HEAT": "0", "FRAME": "round", "FRAME_TITLE": "off",
-    "FRAME_COLOR": "dim", "TINT": "off", "MARGIN": "0",
+    "FRAME_COLOR": "dim", "TINT": "off", "MARGIN": "0", "UPDATE": "notify",
 }
 ENV_ALIASES = {"REMOTE": ("FABLE",), "REMOTE_DEBUG": ("FABLE_DEBUG",)}
 
@@ -285,6 +291,10 @@ def apply_config(conf):
     REMOTE = flag("REMOTE")
     RDEBUG = flag("REMOTE_DEBUG")
     NOTIFY = s("NOTIFY").lower()
+    global UPDATE
+    UPDATE = s("UPDATE").lower()
+    if UPDATE not in ("notify", "auto", "off"):
+        UPDATE = "notify"
 
     p = PALETTES[PALETTE]
     C_RED, C_AMBER, C_GREEN = p["red"], p["amber"], p["green"]
@@ -324,7 +334,7 @@ if not WIDTH:
 
 # Priority decides what gets dropped first when the line is wider than the terminal.
 # >= 90 is never dropped: the model, the meters and the warnings are the whole point.
-PRIO = {"spark": 10, "title": 12, "dir": 15, "cmd": 16, "vim": 17, "agent": 18, "search": 20, "effort": 22, "proj": 24, "pr": 25,
+PRIO = {"spark": 10, "update": 11, "title": 12, "dir": 15, "cmd": 16, "vim": 17, "agent": 18, "search": 20, "effort": 22, "proj": 24, "pr": 25,
         "cache": 28, "git": 30, "time": 35, "burn": 45, "ctx": 40, "eom": 48, "month": 50,
         "session": 60, "credits": 65, "today": 80, "model": 95, "meter": 92,
         "warn": 99, "hint": 99}
@@ -935,6 +945,58 @@ def remote_state():
     except Exception:
         return {}
 
+# ---- update check -------------------------------------------------------------
+# The only network touch besides REMOTE: at most once a day, fully detached,
+# UPDATE=off turns it off entirely.
+UCACHE, ULOCK, U_TTL = (os.path.join(HOME, ".usage-update-cache.json"),
+                        os.path.join(HOME, ".usage-update.lock"), 86400)
+GH_RAW  = "https://raw.githubusercontent.com/Scorpio3310/claude-code-usage-statusline/main/"
+
+def _vtuple(v):
+    try:
+        return tuple(int(x) for x in str(v).strip().split("."))
+    except (TypeError, ValueError):
+        return ()
+
+def refresh_update_cache():
+    import urllib.request
+    latest = None
+    try:
+        with urllib.request.urlopen(GH_RAW + "package.json", timeout=5) as r:
+            latest = (json.load(r).get("version") or "").strip()
+    except Exception:
+        pass
+    _write_json(UCACHE, {"version": 1, "checked_at": time.time(), "latest": latest})
+    if UPDATE == "auto" and latest and _vtuple(latest) > _vtuple(VERSION):
+        # Opt-in self-update: replaces only the INSTALLED copy, and only when the
+        # download really is the announced version and looks like this script.
+        try:
+            with urllib.request.urlopen(GH_RAW + "statusline-usage.sh", timeout=15) as r:
+                body = r.read()
+            if body.startswith(b"#!/usr/bin/env bash") and \
+                    ('STATUSLINE_VERSION="%s"' % latest).encode() in body:
+                fd, tmp = tempfile.mkstemp(dir=HOME)
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(body)
+                os.chmod(tmp, 0o755)
+                os.replace(tmp, os.path.join(HOME, "statusline-usage.sh"))
+        except Exception:
+            pass
+
+def update_available():
+    if UPDATE == "off" or MODE != "render":
+        return None
+    try:
+        c = _read_json(UCACHE) or {}
+        if time.time() - float(c.get("checked_at") or 0) >= U_TTL:
+            _spawn_detached(ULOCK, refresh_update_cache, ttl=60)
+        latest = c.get("latest")
+        if latest and _vtuple(latest) > _vtuple(VERSION):
+            return latest
+    except Exception:
+        pass
+    return None
+
 # ---- meters -----------------------------------------------------------------
 def build_meters(d, remote, month_total=0.0, today_total=0.0):
     out = []
@@ -1444,6 +1506,7 @@ def run_doctor():
         print(f" {mark} {label}" + (f" — {detail}" if detail else ""))
 
     print("tools")
+    line(ok, "version", "v" + VERSION)
     line(ok, "python3", sys.version.split()[0])
     line(ok if shutil.which("git") else bad, "git",
          "needed only for the dirty-file count")
@@ -1561,6 +1624,21 @@ def run_doctor():
                     line(bad, "endpoint", f"HTTP {e.code}")
                 except Exception as e:
                     line(bad, "endpoint", type(e).__name__)
+
+    print("\nupdate")
+    if UPDATE == "off":
+        line(na, "disabled", "UPDATE=off — no version checks")
+    else:
+        uc = _read_json(UCACHE) or {}
+        latest = uc.get("latest")
+        if latest:
+            newer = _vtuple(latest) > _vtuple(VERSION)
+            line(na if newer else ok, "latest",
+                 "v%s — update: npx claude-usage-statusline@latest --update" % latest
+                 if newer else "v%s (up to date)" % latest)
+        else:
+            line(na, "latest", "not checked yet — the next render checks in the background"
+                 if not uc else "last check failed; retries daily")
 
     print("\ngit")
     cwd = os.environ.get("DOCTOR_CWD") or os.getcwd()
@@ -1829,6 +1907,10 @@ def render_status(d):
             for w in build_warnings(meters, remote, now, d, eom_over):
                 line2.append(seg("warn", (IC["warn"] + " " if IC["warn"] else "") + w, C_RED))
 
+    up = update_available()
+    if up:
+        line2.append(seg("update", "update v%s — npx claude-usage-statusline" % up, C_DIM))
+
     if LINES == 1:
         out = [render_line(fit(line1 + line2))]
     else:
@@ -1963,7 +2045,8 @@ LINE2={LINE2}
 GIT={GIT}
 
 # 1 = also fetch per-model quotas (Fable 5, Opus, ...) and the usage-credit balance
-# from api.anthropic.com. The only part of the script that touches the network.
+# from api.anthropic.com. Besides the UPDATE check below, the only part of the
+# script that touches the network.
 REMOTE={REMOTE}
 # 1 = write each successful /usage response to ~/.claude/.usage-remote-debug.json
 REMOTE_DEBUG={REMOTE_DEBUG}
@@ -1971,6 +2054,11 @@ REMOTE_DEBUG={REMOTE_DEBUG}
 # Desktop notification when something crosses THRESHOLD, fired once per crossing:
 # off | threshold | all (all also warns when a limit is projected to run out)
 NOTIFY={NOTIFY}
+
+# New-version check against GitHub, at most once a day, detached (never blocks):
+# notify = dim "update vX.Y" hint on line 2 · auto = also self-update the installed
+# copy in ~/.claude (opt-in!) · off = never touch the network for this
+UPDATE={UPDATE}
 """
 
 PRESET_DIR = os.path.join(HOME, "statusline-presets")
@@ -2021,6 +2109,7 @@ TUI_ENUMS = {
     "RULE": ["0", "1"],
     "GIT": ["branch", "dirty", "off"], "REMOTE": ["0", "1"],
     "NOTIFY": ["off", "threshold", "all"],
+    "UPDATE": ["notify", "auto", "off"],
 }
 TUI_HELP = {
     "THEME": "soft/rainbow/badge work in ANY font · without a Nerd Font powerline=hard edges, slant/rainbow=╱ cuts, capsule=wide pills",
@@ -2048,6 +2137,7 @@ TUI_HELP = {
     "GIT": "branch is read from .git/HEAD (free); dirty also counts changes in the background",
     "REMOTE": "fetches Fable 5/Opus quotas + usage credits from api.anthropic.com (cached, opt-in)",
     "NOTIFY": "desktop notification when something crosses the threshold",
+    "UPDATE": "daily new-version check: notify = dim hint on line 2 · auto = self-update the installed copy · off = no network",
     "title": "session name set with /rename", "model": "current model + fast-mode badge",
     "effort": "reasoning effort level", "git": "branch (+ changed files with GIT=dirty)",
     "dir": "project / repo name", "pr": "open PR for this branch",
@@ -2093,7 +2183,7 @@ def run_tui():
     opt_keys = ["THEME", "FRAME", "FRAME_TITLE", "FRAME_COLOR", "TINT", "PALETTE",
                 "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE", "NOTICE",
                 "THRESHOLD", "RULE", "MARGIN", "BUDGET_MONTH", "BUDGET_DAY",
-                "GIT", "REMOTE", "NOTIFY"]
+                "GIT", "REMOTE", "NOTIFY", "UPDATE"]
     # Rows drawn as a tree under the row whose value decides their visibility.
     CHILD_OF = {"FRAME": "THEME", "FRAME_TITLE": "THEME", "FRAME_COLOR": "THEME",
                 "TINT": "THEME", "BARW": "BAR", "BAR_HEAT": "BAR", "NOTICE": "STYLE"}
@@ -2153,7 +2243,7 @@ def run_tui():
               "LINES": "Lines", "STYLE": "Density", "THRESHOLD": "Threshold",
               "NOTICE": "Notice", "RULE": "Rule line", "MARGIN": "Margin", "GIT": "Git",
               "BUDGET_MONTH": "Budget $/mo", "BUDGET_DAY": "Budget $/day",
-              "REMOTE": "Remote fetch", "NOTIFY": "Notify"}
+              "REMOTE": "Remote fetch", "NOTIFY": "Notify", "UPDATE": "Updates"}
     ENUM_NAMES = {"REMOTE": {"0": "off", "1": "on"}, "RULE": {"0": "off", "1": "on"},
                   "BAR_HEAT": {"0": "off", "1": "on"}}
 
@@ -2586,6 +2676,7 @@ case "${1:-}" in
       python3 -c "$PY" < /dev/null
     exit 0 ;;
   --help|-h)
+    echo "claude-usage-statusline v$STATUSLINE_VERSION"
     echo "usage: statusline-usage.sh [command]"
     echo "  (no arguments)         read the Claude Code statusline JSON on stdin and render"
     echo "  --configure            full-screen live editor (arrows, space, J/K, s to save)"

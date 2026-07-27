@@ -5,7 +5,7 @@ A single Bash script that turns the data Claude Code passes to a
 lines: **what's close to a limit** on top, **what it's costing** underneath — no API
 key, no external server, nothing leaves your machine.\*
 
-![Claude Code usage statusline](screenshot.png)
+![Claude Code usage statusline](https://raw.githubusercontent.com/Scorpio3310/claude-code-usage-statusline/main/screenshot.png)
 
 Quiet, because nothing needs your attention yet:
 
@@ -28,28 +28,52 @@ with your real numbers before you commit to it:
 bash ~/.claude/statusline-usage.sh --configure
 ```
 
-<sub>\* One exception, off by default: the opt‑in [remote meter](#about-the-remote-meter-fable-5--usage-credits)
-is the only part that makes a network call.</sub>
+<sub>\* Two exceptions, both under your control: the opt‑in [remote meter](#about-the-remote-meter-fable-5--usage-credits)
+and a once‑a‑day version check (`UPDATE=off` disables it).</sub>
 
 ## Install
 
 Requires `python3` (the script uses it to parse and format the JSON).
 
 ```bash
-bash install.sh      # copies the script to ~/.claude/, registers it, asks what to show
+npx claude-usage-statusline
 ```
 
-Then open a **new** Claude Code session. The installer backs up any existing
-`settings.json` and refuses to overwrite a different statusline you already use.
-On first install it opens the full-screen configurator (quitting with `q` writes
-nothing — defaults apply); an existing config is kept as-is. With no terminal
-attached (piped install, CI) it writes defaults instead of blocking.
+That's the whole install: it copies the script to `~/.claude/`, registers it in
+`settings.json`, and on first install opens the full-screen configurator (quitting
+with `q` writes nothing — defaults apply). An existing config is kept as-is; a
+different statusline you already use is never overwritten (and `settings.json` is
+backed up before any change). With no terminal attached (piped install, CI) it
+writes defaults instead of blocking. Then open a **new** Claude Code session.
+
+Updating later:
+
+```bash
+npx claude-usage-statusline@latest --update    # replaces the script, keeps your config
+```
+
+The statusline checks for new versions at most once a day (detached, never blocks a
+render) and shows a dim `update vX.Y` hint on line 2 when one exists — `UPDATE=off`
+turns the check off, `UPDATE=auto` lets it replace the installed copy by itself.
 
 <details>
-<summary>Manual install</summary>
+<summary>Other ways to install</summary>
 
-Copy `statusline-usage.sh` to `~/.claude/statusline-usage.sh`, make it executable
-(`chmod +x`), and add this to `~/.claude/settings.json`:
+Straight from GitHub, no npm registry involved (always the latest push):
+
+```bash
+npx github:Scorpio3310/claude-code-usage-statusline
+```
+
+From a clone:
+
+```bash
+git clone https://github.com/Scorpio3310/claude-code-usage-statusline && cd claude-code-usage-statusline
+bash install.sh
+```
+
+Fully manual: copy `statusline-usage.sh` to `~/.claude/statusline-usage.sh`, make it
+executable (`chmod +x`), and add this to `~/.claude/settings.json`:
 
 ```json
 {
@@ -80,7 +104,7 @@ the heat bar for sep themes, `NOTICE` for the adaptive style, and so on. The pre
 at the bottom is rendered by the real renderer **with your real spend numbers**, so
 you see exactly what each toggle does before you commit to it:
 
-![The live configurator](configurator.png)
+![The live configurator](https://raw.githubusercontent.com/Scorpio3310/claude-code-usage-statusline/main/configurator.png)
 
 It writes `~/.claude/statusline-usage.conf`, which you can also edit by hand. Any key
 can be overridden for a single session with the matching `CLAUDE_USAGE_<KEY>` env var
@@ -111,6 +135,7 @@ can be overridden for a single session with the matching `CLAUDE_USAGE_<KEY>` en
 | `GIT` | `branch` | `off` · `branch` (free) · `dirty` (also counts changed files) |
 | `REMOTE` | `0` | Fetch per‑model quotas and the usage‑credit balance (see below) |
 | `NOTIFY` | `off` | `off` · `threshold` (desktop notification on a crossing) · `all` (also when a limit is projected to run out) |
+| `UPDATE` | `notify` | Once-a-day new-version check against GitHub, fully detached: `notify` shows a dim `update vX.Y` hint on line 2 · `auto` also replaces the installed copy by itself (opt-in trade-off: new code without confirmation) · `off` makes no network call at all |
 
 ## Commands
 
@@ -155,7 +180,7 @@ month to date ≈$27,873 · last 7 days ≈$193/day · 5 active days in the last
 
 Thirteen themes, all previewable with `--preview` and switchable live in the configurator:
 
-![All thirteen themes](themes.png)
+![All thirteen themes](https://raw.githubusercontent.com/Scorpio3310/claude-code-usage-statusline/main/themes.png)
 
 ```
 plain      ⚡ Opus 5·1M high  ⚠ 7d ▉▉▉▉▉▉▉░ 83%·2d  ctx 12% of 1M  ⏱ 1h 11m
@@ -396,7 +421,7 @@ How it behaves when enabled:
   straight into the request headers; `ps` can't see it. The cache
   (`~/.claude/.usage-remote-cache.json`, mode `0600`) holds percentages, dollar amounts
   and reset times — nothing else.
-- **The only host contacted is `api.anthropic.com`** — the same one Claude Code already
+- **The only host this meter contacts is `api.anthropic.com`** — the same one Claude Code already
   talks to. It's a `GET` with no body: it reads your own usage and sends nothing about
   your code, prompts, or session.
 - **Every failure is silent.** No token, expired token, timeout, changed response shape
@@ -459,6 +484,8 @@ ships a new model:
 | `screenshot.png` | Hero screenshot: the statusline in a live Claude Code session. |
 | `configurator.png` | The full-screen `--configure` editor. |
 | `themes.png` | `--preview` gallery of all thirteen themes. |
+| `package.json` | npm packaging (`npx claude-usage-statusline` runs `install.sh`). |
+| `.github/workflows/publish.yml` | Publishes to npm when a `v*` tag is pushed (checks tag = package.json = script version first). |
 | `LICENSE` | MIT license. |
 
 ## License

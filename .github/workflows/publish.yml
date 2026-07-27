@@ -1,0 +1,33 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Versions must agree (tag, package.json, script)
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          SCRIPT="$(sed -n 's/^export STATUSLINE_VERSION="\(.*\)"/\1/p' statusline-usage.sh | head -1)"
+          echo "tag=$TAG package.json=$PKG script=$SCRIPT"
+          [ "$TAG" = "$PKG" ] && [ "$TAG" = "$SCRIPT" ] || {
+            echo "::error::version mismatch — bump package.json and STATUSLINE_VERSION before tagging"
+            exit 1
+          }
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,39 @@
+{
+  "name": "claude-usage-statusline",
+  "version": "1.0.0",
+  "description": "Usage-focused statusline for Claude Code: real daily/monthly spend, rate-limit meters, per-model quotas, thirteen themes, palettes and a zero-dependency live TUI configurator.",
+  "bin": {
+    "claude-usage-statusline": "./install.sh"
+  },
+  "files": [
+    "statusline-usage.sh",
+    "install.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Scorpio3310/claude-code-usage-statusline.git"
+  },
+  "homepage": "https://github.com/Scorpio3310/claude-code-usage-statusline#readme",
+  "bugs": {
+    "url": "https://github.com/Scorpio3310/claude-code-usage-statusline/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "statusline",
+    "status-bar",
+    "usage",
+    "spend",
+    "rate-limit",
+    "terminal",
+    "cli"
+  ],
+  "author": "Nik Klemenc",
+  "license": "MIT",
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}
