@@ -209,6 +209,20 @@ fonts — smaller than the cell, baseline‑aligned — which shows up as notche
 floating triangles; they are gone from the fallback path entirely. If you want the
 pointed powerline look, install a Nerd Font and set `ICONS=nerd`.
 
+**Nerd Font per terminal, not per machine.** Every terminal picks its own font, so
+`ICONS=nerd` can look perfect in one and show tofu boxes in another. The classic
+case is VS Code: its integrated terminal inherits `editor.fontFamily` (often Fira
+Code or Menlo — no Nerd glyphs) unless you set
+
+```json
+"terminal.integrated.fontFamily": "JetBrainsMono Nerd Font"   // whichever Nerd Font you installed
+```
+
+Confusingly, the powerline *separators* (``, ``, capsule caps) still render there
+even without the font — VS Code draws the U+E0B0–E0BF block and box‑drawing
+characters itself — while the *icons* (``, ``, ``) come from the font and turn
+into boxes. `--doctor`'s glyph sampler shows in two seconds which case you're in.
+
 So `capsule` without a Nerd Font gives you square-edged pills instead of boxes of tofu,
 and `ICONS=nerd` is the explicit opt-in once you've installed the font. Palettes are an
 independent axis: `PALETTE=ocean` — or `nord`, `dracula`, `gruvbox`, `catppuccin`, all
