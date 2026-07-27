@@ -1564,6 +1564,8 @@ def run_doctor():
     heat_req = str(ec.get("BAR_HEAT", "0")).strip().lower() not in ("", "0", "false", "no", "off")
     if heat_req and not BAR_HEAT:
         line(na, "BAR_HEAT ignored", f"'{THEME_NAME}' is not a sep theme")
+    if RULE and T.get("frame"):
+        line(na, "RULE ignored", f"'{THEME_NAME}' draws its own frame border")
     raw = _load_conf_file()
     unknown = sorted(k for k in raw if k not in DEFAULTS)
     if unknown:
@@ -2022,6 +2024,7 @@ TINT={TINT}
 ICONS={ICONS}
 
 # 1 = draw a dim ─ rule as the last line, separating usage from Claude Code's footer
+# (the frame theme draws its own bottom border and ignores this)
 RULE={RULE}
 
 # Columns shaved off the width Claude Code reports — its UI draws the statusline in
@@ -2219,13 +2222,14 @@ def run_tui():
         return items
     items1, items2 = mklist("SEGMENTS", CATALOG1), mklist("LINE2", CATALOG2)
 
-    opt_keys = ["THEME", "FRAME", "FRAME_TITLE", "FRAME_COLOR", "TINT", "PALETTE",
-                "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE", "NOTICE",
-                "THRESHOLD", "RESET", "RULE", "MARGIN", "BUDGET_MONTH", "BUDGET_DAY",
-                "GIT", "REMOTE", "NOTIFY", "UPDATE"]
+    opt_keys = ["THEME", "FRAME", "FRAME_TITLE", "FRAME_COLOR", "TINT", "RULE",
+                "PALETTE", "ICONS", "BAR", "BARW", "BAR_HEAT", "LINES", "STYLE",
+                "NOTICE", "THRESHOLD", "RESET", "MARGIN", "BUDGET_MONTH",
+                "BUDGET_DAY", "GIT", "REMOTE", "NOTIFY", "UPDATE"]
     # Rows drawn as a tree under the row whose value decides their visibility.
     CHILD_OF = {"FRAME": "THEME", "FRAME_TITLE": "THEME", "FRAME_COLOR": "THEME",
-                "TINT": "THEME", "BARW": "BAR", "BAR_HEAT": "BAR", "NOTICE": "STYLE"}
+                "TINT": "THEME", "RULE": "THEME",
+                "BARW": "BAR", "BAR_HEAT": "BAR", "NOTICE": "STYLE"}
 
     def visible(k):
         # Only rows the current config can actually feel; mirrors apply_config's gates.
@@ -2238,6 +2242,9 @@ def run_tui():
             return bool(t.get("frame") or t.get("connector"))
         if k in ("TINT", "BAR_HEAT"):
             return sep_color
+        if k == "RULE":
+            # The frame theme draws its own bottom border; the rule never fires there.
+            return not t.get("frame")
         if k == "BARW":
             return conf.get("BAR", "theme").lower() != "dot"
         if k == "NOTICE":
